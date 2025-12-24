@@ -27,6 +27,7 @@ structure View where
   vkind  : ViewKind := .tbl
   cache  : Option Table := none  -- cached result
   keyCols : List Nat := []       -- key columns for aggregate/pivot
+  selCols : List Nat := []       -- selected columns for aggregate
 
 -- | App state with view stack
 structure State where
@@ -36,7 +37,7 @@ structure State where
   quit   : Bool := false
 
 -- | Default empty view
-def View.empty : View := ⟨"", "from df", Viewport.create, Viewport.create, .tbl, none, []⟩
+def View.empty : View := ⟨"", "from df", Viewport.create, Viewport.create, .tbl, none, [], []⟩
 
 -- | Current view
 def State.cur (s : State) : View := s.views.headD View.empty
@@ -110,6 +111,13 @@ def chI : UInt32 := 73       -- 'I' info box
 def chT : UInt32 := 84       -- 'T' duplicate view
 def chSS : UInt32 := 83      -- 'S' swap views
 def chExcl : UInt32 := 33    -- '!' toggle key column
+def chB : UInt32 := 98       -- 'b' aggregate
+def chColon : UInt32 := 58   -- ':' command mode
+def chLL : UInt32 := 76      -- 'L' load file
+def chR : UInt32 := 114      -- 'r' list directory
+def chSpace : UInt32 := 32   -- Space toggle selection
+def ch0 : UInt32 := 48       -- '0' first column
+def chDollar : UInt32 := 36  -- '$' last column
 
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String
@@ -171,16 +179,23 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   else if ev.key == Term.keyArrowLeft || ev.ch == chH then
     let prev := Render.prevInDisplay v.keyCols nc v.colVP.cursor
     return s.setCur { v with colVP := ⟨prev, v.colVP.offset⟩ }
-  -- page up/down
-  else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then
+  -- page up/down (Ctrl-D/U send key=4/21, not ch)
+  else if ev.key == Term.keyPageDown || ev.key == chCtrlD.toUInt16 then
     return s.setCur { v with rowVP := v.rowVP.pageDown pageSize nr }
-  else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then
+  else if ev.key == Term.keyPageUp || ev.key == chCtrlU.toUInt16 then
     return s.setCur { v with rowVP := v.rowVP.pageUp pageSize }
-  -- home/end (g/G)
+  -- home/end rows (g/G)
   else if ev.key == Term.keyHome || ev.ch == chG then
     return s.setCur { v with rowVP := Viewport.goTop }
   else if ev.key == Term.keyEnd || ev.ch == chGG then
     return s.setCur { v with rowVP := Viewport.goEnd nr }
+  -- first/last column (0/$)
+  else if ev.ch == ch0 then
+    let first := Render.displayOrder v.keyCols nc |>.headD 0
+    return s.setCur { v with colVP := ⟨first, 0⟩ }
+  else if ev.ch == chDollar then
+    let last := Render.displayOrder v.keyCols nc |>.getLast? |>.getD 0
+    return s.setCur { v with colVP := ⟨last, v.colVP.offset⟩ }
   -- sort asc/desc
   else if ev.ch == chLBrack then
     let col := v.colVP.cursor
@@ -237,20 +252,20 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   -- meta view
   else if ev.ch == chM then
     let metaPrql := v.prql ++ " | meta df"
-    let mv : View := ⟨v.path, metaPrql, Viewport.create, Viewport.create, .colMeta, none, []⟩
+    let mv : View := ⟨v.path, metaPrql, Viewport.create, Viewport.create, .colMeta, none, [], []⟩
     return s.push mv
   -- info box (I) - show cell/column details
   else if ev.ch == chI then
     let col := v.colVP.cursor
     let row := v.rowVP.cursor
-    let iv : View := ⟨v.path, v.prql, Viewport.create, Viewport.create, .info col row, v.cache, v.keyCols⟩
+    let iv : View := ⟨v.path, v.prql, Viewport.create, Viewport.create, .info col row, v.cache, v.keyCols, v.selCols⟩
     return s.push iv
   -- freq: push freq view with PRQL
   else if ev.ch == chF then
     let col := v.colVP.cursor
     let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
     let freqPrql := v.prql ++ " | freq " ++ colName
-    let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none, []⟩
+    let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none, [], []⟩
     return s.push fv
   -- enter: in freq view, filter parent by selected value
   else if ev.key == Term.keyEnter then
@@ -279,6 +294,45 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
       then v.keyCols.filter (· != col)
       else v.keyCols ++ [col]
     return s.setCur { v with keyCols := newKeys }
+  -- toggle column selection (Space)
+  else if ev.ch == chSpace then
+    let col := v.colVP.cursor
+    let newSel := if v.selCols.contains col
+      then v.selCols.filter (· != col)
+      else v.selCols ++ [col]
+    return s.setCur { v with selCols := newSel }
+  -- aggregate by key columns (b)
+  else if ev.ch == chB then
+    if v.keyCols.isEmpty then return { s with msg := "No key columns set (use !)" }
+    -- build PRQL: group {keys} (aggregate {sum col, ...})
+    let keyNames := v.keyCols.map fun i => (tbl.cols.getD i ⟨"?"⟩).name
+    let aggCols := if v.selCols.isEmpty then [v.colVP.cursor] else v.selCols
+    let aggNames := aggCols.map fun i => (tbl.cols.getD i ⟨"?"⟩).name
+    let aggExprs := aggNames.map fun n => s!"sum_{n} = sum {n}, cnt_{n} = count {n}"
+    let aggPrql := v.prql ++ " | group {" ++ String.intercalate ", " keyNames ++
+                   "} (aggregate {" ++ String.intercalate ", " aggExprs ++ "})"
+    let av : View := ⟨v.path, aggPrql, Viewport.create, Viewport.create, .tbl, none, [], []⟩
+    return s.push av
+  -- command mode (:) - system sources
+  else if ev.ch == chColon then
+    let cmds := "ps\nenv\ndf\nls\ntcp"
+    match ← runFzf ["--prompt=: "] cmds with
+    | some cmd =>
+      let srcPath := s!"source:{cmd}"
+      let sv : View := ⟨srcPath, "from df", Viewport.create, Viewport.create, .tbl, none, [], []⟩
+      return s.push sv
+    | none => return s
+  -- load file (L)
+  else if ev.ch == chLL then
+    match ← runFzf ["--prompt=Load: "] "" with
+    | some path =>
+      let lv : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none, [], []⟩
+      return s.push lv
+    | none => return s
+  -- list directory (r)
+  else if ev.ch == chR then
+    let rv : View := ⟨"source:ls", "from df", Viewport.create, Viewport.create, .tbl, none, [], []⟩
+    return s.push rv
   -- dump table to stdout and quit (Q)
   else if ev.ch == chQQ then
     Term.shutdown
@@ -292,8 +346,13 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
       IO.println row
     return { s with quit := true }
   -- quit/pop: pop view or quit if at root
-  else if ev.key == Term.keyEsc || ev.ch == chQ then
+  else if ev.ch == chQ then
     if s.views.length > 1 then return s.pop
+    else return { s with quit := true }
+  -- Esc: clear selection, or pop if no selection
+  else if ev.key == Term.keyEsc then
+    if !v.selCols.isEmpty then return s.setCur { v with selCols := [] }
+    else if s.views.length > 1 then return s.pop
     else return { s with quit := true }
   else if ev.ch == chCtrlC then
     return { s with quit := true }
@@ -316,7 +375,8 @@ partial def loop (s : State) : IO Unit := do
     | _ =>
       let off ← Render.table tbl v'.rowVP v'.colVP h.toNat w.toNat v'.keyCols
       Render.statusBar v'.path v'.rowVP.cursor tbl.nRows
-                       s.views.length v'.keyCols tbl.cols (h - 1)
+                       s.views.length v'.keyCols v'.selCols tbl.cols (h - 1)
+      Term.present
       pure (off, s)
   -- update column offset
   let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
@@ -344,7 +404,7 @@ def run (path : String) (keys : String := "") : IO Unit := do
   if r < 0 then
     IO.eprintln "Failed to init terminal"
     return
-  let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none, []⟩
+  let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none, [], []⟩
   let s : State := { views := [v], keys := keys.toList }
   loop s
   Backend.shutdown

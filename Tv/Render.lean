@@ -175,17 +175,18 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
     -- render separator for each row
     if !keyCols.isEmpty then
       Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.white Term.black "|"
-  Term.present
   return vr.offset
 
 -- | Render status bar at bottom
 def statusBar (path : String) (curRow nRows viewCnt : Nat)
-              (keyCols : List Nat) (cols : Array Column) (y : UInt32) : IO Unit := do
+              (keyCols selCols : List Nat) (cols : Array Column) (y : UInt32) : IO Unit := do
   let pos := s!"{curRow + 1}/{nRows}"
   let viewStr := if viewCnt > 1 then s!"[{viewCnt}] " else ""
   let keyStr := if keyCols.isEmpty then ""
     else " !" ++ String.intercalate "," (keyCols.map fun i => (cols.getD i default).name)
-  let msg := s!"{viewStr}{path}  {pos}{keyStr}"
+  let selStr := if selCols.isEmpty then ""
+    else " *" ++ String.intercalate "," (selCols.map fun i => (cols.getD i default).name)
+  let msg := s!"{viewStr}{path}  {pos}{keyStr}{selStr}"
   Term.print 0 y Term.cyan Term.black msg
 
 -- | Render info box (centered overlay)
