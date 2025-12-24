@@ -30,7 +30,7 @@ def parse (content : String) : Table :=
     let cols := colNames.map (⟨·⟩) |>.toArray
     let rows := rest.map fun line =>
       (splitBy ',' line).map parseCell |>.toArray
-    ⟨cols, rows.toArray⟩
+    Table.create cols rows.toArray
 
 -- | Load CSV from file
 def loadFile (path : String) : IO Table := do

@@ -45,11 +45,11 @@ structure Column where
   name : String
   deriving Repr, Inhabited
 
--- | Table with sized dimensions
--- Uses Array for simplicity; Vector for stricter sizing
+-- | Table with sized dimensions and cached widths
 structure Table where
   cols : Array Column
   rows : Array (Array Cell)
+  widths : Array Nat  -- cached column widths
   deriving Repr
 
 namespace Table
@@ -57,7 +57,19 @@ namespace Table
 def nCols (t : Table) : Nat := t.cols.size
 def nRows (t : Table) : Nat := t.rows.size
 
-def empty : Table := ⟨#[], #[]⟩
+-- | Compute column widths (max of header and data, capped at 20)
+def calcWidths (cols : Array Column) (rows : Array (Array Cell)) : Array Nat :=
+  let hdrW := cols.map (·.name.length)
+  let dataW := rows.foldl (init := hdrW) fun acc row =>
+    let rowW := row.map (Cell.toString ·) |>.map String.length
+    Array.zipWith (fun a b => max a b) acc rowW
+  dataW.map (fun w => min 20 w)
+
+-- | Create table with cached widths
+def create (cols : Array Column) (rows : Array (Array Cell)) : Table :=
+  ⟨cols, rows, calcWidths cols rows⟩
+
+def empty : Table := ⟨#[], #[], #[]⟩
 
 -- | Get cell at (row, col), default to null
 def get (t : Table) (r c : Nat) : Cell :=
@@ -67,15 +79,11 @@ def get (t : Table) (r c : Nat) : Cell :=
 def delCol (t : Table) (idx : Nat) : Table :=
   if idx ≥ t.nCols then t
   else
-    { cols := t.cols.eraseIdx! idx
-    , rows := t.rows.map (·.eraseIdx! idx) }
+    let newCols := t.cols.eraseIdx! idx
+    let newRows := t.rows.map (·.eraseIdx! idx)
+    ⟨newCols, newRows, t.widths.eraseIdx! idx⟩
 
--- | Get column widths (max of header and data, capped at 20)
-def colWidths (t : Table) : Array Nat :=
-  let hdrW := t.cols.map (·.name.length)
-  let dataW := t.rows.foldl (init := hdrW) fun acc row =>
-    let rowW := row.map (Cell.toString ·) |>.map String.length
-    Array.zipWith (fun a b => max a b) acc rowW
-  dataW.map (fun w => min 20 w)
+-- | Access cached widths
+def colWidths (t : Table) : Array Nat := t.widths
 
 end Table
