@@ -63,23 +63,25 @@ def colRange (cols : Array ColPos) : Option (Nat × Nat) :=
   | _, _ => none
 
 -- | Compute visible columns based on offset and cursor
--- Left-align from offset, scroll right/left when cursor out of view
+-- Scroll one column at a time when cursor out of view
 def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) : Array ColPos × Nat :=
   let cols := buildFromLeft widths offset screenW
   match colRange cols with
   | some (first, last) =>
     if cursor > last then
-      -- scroll right: cursor at right edge
-      (buildFromRight widths cursor screenW, cursor)
+      -- scroll right by 1: increment offset
+      let newOffset := offset + 1
+      (buildFromLeft widths newOffset screenW, newOffset)
     else if cursor < first then
-      -- scroll left: cursor at left edge
-      (buildFromLeft widths cursor screenW, cursor)
+      -- scroll left by 1: decrement offset
+      let newOffset := if offset > 0 then offset - 1 else 0
+      (buildFromLeft widths newOffset screenW, newOffset)
     else
       -- cursor visible, keep current offset
       (cols, offset)
   | none =>
-    -- no columns fit, just show cursor column
-    (buildFromRight widths cursor screenW, cursor)
+    -- no columns fit, start from cursor
+    (buildFromLeft widths cursor screenW, cursor)
 
 -- | Render table with viewport, returns new column offset
 def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Nat := do
