@@ -5,30 +5,33 @@ import Tv.Types
 import Tv.Viewport
 import Tv.Term
 import Tv.Render
-import Tv.Csv
+import Tv.Backend
 
 namespace App
 
--- | View type: table or freq
-inductive ViewType | table | freq (col : Nat) deriving Repr
+-- | View kind: how to render/interact
+inductive ViewKind where | tbl | freqV (col : String) | colMeta | fld deriving Inhabited
 
--- | Single view with table and viewports
+-- | Single view with PRQL query
 structure View where
-  table  : Table
+  path   : String        -- file path
+  prql   : String        -- PRQL query (from df | ...)
   rowVP  : Viewport
   colVP  : Viewport
-  vtype  : ViewType := .table
-  deriving Repr
+  vkind  : ViewKind := .tbl
+  cache  : Option Table := none  -- cached result
 
 -- | App state with view stack
 structure State where
   views  : List View      -- head is current, tail is parent stack
-  path   : String
+  msg    : String := ""   -- status message
   quit   : Bool := false
-  deriving Repr
+
+-- | Default empty view
+def View.empty : View := ⟨"", "from df", Viewport.create, Viewport.create, .tbl, none⟩
 
 -- | Current view
-def State.cur (s : State) : View := s.views.headD ⟨Table.empty, Viewport.create, Viewport.create, .table⟩
+def State.cur (s : State) : View := s.views.headD View.empty
 
 -- | Update current view
 def State.setCur (s : State) (v : View) : State :=
@@ -42,11 +45,32 @@ def State.push (s : State) (v : View) : State :=
 def State.pop (s : State) : State :=
   { s with views := s.views.tailD [] }
 
+-- | Fetch table for view (uses cache or queries backend)
+def View.fetch (v : View) : IO (View × Table) := do
+  match v.cache with
+  | some t => return (v, t)
+  | none =>
+    match ← Backend.query v.prql v.path with
+    | .ok t => return ({ v with cache := some t }, t)
+    | .error e =>
+      IO.eprintln s!"Query error: {e}"
+      return (v, Table.empty)
+
+-- | Invalidate cache (after PRQL change)
+def View.invalidate (v : View) : View := { v with cache := none }
+
+-- | View.copy helper for updating PRQL and resetting viewport
+def View.copy (v : View) (prql : String := v.prql) (rowVP : Viewport := v.rowVP) : View :=
+  { v with prql := prql, rowVP := rowVP, cache := none }
+
 -- | Initialize state from file
 def init (path : String) : IO State := do
-  let tbl ← Csv.loadFile path
-  let v := { table := tbl, rowVP := Viewport.create, colVP := Viewport.create : View }
-  return { views := [v], path := path }
+  let ok ← Backend.init
+  if !ok then
+    IO.eprintln "Failed to init backend"
+    return { views := [], quit := true }
+  let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none⟩
+  return { views := [v] }
 
 -- | Character codes
 def chJ : UInt32 := 106
@@ -60,11 +84,19 @@ def chF : UInt32 := 70   -- 'F' for freq
 def chQ : UInt32 := 113  -- 'q'
 def chCtrlC : UInt32 := 3  -- Ctrl+C
 
--- | Handle key event
-def handleKey (s : State) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :=
+-- | Format cell value for PRQL filter
+def cellToPrql : Cell → String
+  | .null => "null"
+  | .int n => s!"{n}"
+  | .float f => s!"{f}"
+  | .str s => s!"'{s}'"
+  | .bool b => if b then "true" else "false"
+
+-- | Handle key event (table passed from fetch)
+def handleKey (s : State) (tbl : Table) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :=
   let v := s.cur
-  let nr := v.table.nRows
-  let nc := v.table.nCols
+  let nr := tbl.nRows
+  let nc := tbl.nCols
   let pageSize := max 1 (screenH - 2)
   -- movement keys
   if key == Term.keyArrowDown || ch == chJ then
@@ -85,33 +117,27 @@ def handleKey (s : State) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :
     s.setCur { v with rowVP := Viewport.goTop }
   else if key == Term.keyEnd || ch == chGG then
     s.setCur { v with rowVP := Viewport.goEnd nr }
-  -- freq: push freq view for current column
+  -- freq: push freq view with PRQL
   else if ch == chF then
     let col := v.colVP.cursor
-    let freqTbl := v.table.freq col
-    let freqView := { table := freqTbl, rowVP := Viewport.create, colVP := Viewport.create, vtype := .freq col : View }
-    s.push freqView
-  -- enter: in freq view, filter parent and pop
+    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let freqPrql := s!"{v.prql} | freq {colName} df"
+    let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none⟩
+    s.push fv
+  -- enter: in freq view, filter parent by selected value
   else if key == Term.keyEnter then
-    match v.vtype with
-    | .freq col =>
+    match v.vkind with
+    | .freqV colName =>
       let selRow := v.rowVP.cursor
-      let selVal := v.table.get selRow 0  -- first column is the value
+      let selVal := tbl.get selRow 0  -- first column is the value
       let parent := s.pop
       match parent.views with
       | pv :: rest =>
-        let filtered := pv.table.filter col selVal
-        let newPV := { pv with table := filtered, rowVP := Viewport.create }
+        let filterPrql := s!"{pv.prql} | filter {colName} == {cellToPrql selVal}"
+        let newPV := (pv.invalidate).copy (prql := filterPrql) (rowVP := Viewport.create)
         { parent with views := newPV :: rest }
-      | [] => s  -- no parent, do nothing
-    | .table => s  -- enter in table view does nothing
-  -- delete column
-  else if ch == chD then
-    if nc > 1 then
-      let newTbl := v.table.delCol v.colVP.cursor
-      let newColVP := if v.colVP.cursor ≥ nc - 1 then v.colVP.moveLeft else v.colVP
-      s.setCur { v with table := newTbl, colVP := newColVP }
-    else s
+      | [] => s
+    | _ => s
   -- quit/pop: pop view or quit if at root
   else if key == Term.keyEsc || ch == chQ then
     if s.views.length > 1 then s.pop
@@ -122,21 +148,24 @@ def handleKey (s : State) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :
 
 -- | Main event loop
 partial def loop (s : State) : IO Unit := do
-  if s.quit then return ()
+  if s.quit || s.views.isEmpty then return ()
   let v := s.cur
-  -- render and get new column offset
+  -- fetch table (uses cache if available)
+  let (v', tbl) ← v.fetch
+  let s := s.setCur v'
+  -- render
   let w ← Term.width
   let h ← Term.height
-  let newColOffset ← Render.table v.table v.rowVP v.colVP h.toNat w.toNat
-  Render.statusBar s.path v.rowVP.cursor v.colVP.cursor
-                   v.table.nRows v.table.nCols (h - 1)
+  let newColOffset ← Render.table tbl v'.rowVP v'.colVP h.toNat w.toNat
+  Render.statusBar v'.path v'.rowVP.cursor v'.colVP.cursor
+                   tbl.nRows tbl.nCols (h - 1)
   -- update column offset
-  let v := { v with colVP := ⟨v.colVP.cursor, newColOffset⟩ }
-  let s := s.setCur v
+  let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
+  let s := s.setCur v'
   -- poll event
   let ev ← Term.pollEvent
   let s' := if ev.type == Term.eventKey then
-              handleKey s ev.key ev.ch h.toNat
+              handleKey s tbl ev.key ev.ch h.toNat
             else s
   loop s'
 
@@ -148,6 +177,7 @@ def run (path : String) : IO Unit := do
     return
   let s ← init path
   loop s
+  Backend.shutdown
   Term.shutdown
 
 end App
