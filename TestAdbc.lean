@@ -39,6 +39,19 @@ def main : IO Unit := do
   | .error e => IO.println s!"Count error: {e}"
   | .ok n => IO.println s!"Total rows: {n}"
 
+  -- Test freq
+  IO.println "\nTesting freq..."
+  match ← Backend.query "from df | freq b" "data/basic.csv" with
+  | .error e => IO.println s!"Freq error: {e}"
+  | .ok tbl =>
+    IO.println s!"Freq: {tbl.nRows} rows, {tbl.nCols} cols"
+    for c in tbl.cols do IO.print s!"{c.name}\t"
+    IO.println ""
+    for r in [:tbl.nRows] do
+      for c in [:tbl.nCols] do
+        IO.print s!"{tbl.get r c}\t"
+      IO.println ""
+
   -- Shutdown
   Backend.shutdown
   IO.println "\nDone"

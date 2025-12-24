@@ -9,9 +9,13 @@ namespace Backend
 
 -- | PRQL function definitions (prepended to all queries)
 def prqlFuncs : String := "
-let freq = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | sort {-Cnt})
+let freq = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
 let cnt = func tbl <relation> -> (from tbl | aggregate {n = count this})
 "
+
+-- | Theorems: freq PRQL includes required columns
+theorem freq_has_pct : (prqlFuncs.splitOn "Pct").length > 1 := by native_decide
+theorem freq_has_bar : (prqlFuncs.splitOn "Bar").length > 1 := by native_decide
 
 -- | Compile PRQL to SQL using prqlc CLI (stdin → stdout)
 def compilePrql (prql : String) : IO (Except String String) := do
