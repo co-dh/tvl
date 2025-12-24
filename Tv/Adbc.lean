@@ -43,6 +43,10 @@ opaque cellStr : @& QueryResult → UInt64 → UInt64 → IO String
 @[extern "lean_qr_cell_int"]
 opaque cellInt : @& QueryResult → UInt64 → UInt64 → IO Int
 
+-- | Get cell as Float
+@[extern "lean_qr_cell_float"]
+opaque cellFloat : @& QueryResult → UInt64 → UInt64 → IO Float
+
 -- | Check if cell is null
 @[extern "lean_qr_cell_is_null"]
 opaque cellIsNull : @& QueryResult → UInt64 → UInt64 → IO Bool

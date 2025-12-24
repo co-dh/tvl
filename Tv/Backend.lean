@@ -109,8 +109,8 @@ def qrToTable (qr : Adbc.QueryResult) : IO Table := do
             let v ← Adbc.cellInt qr r.toUInt64 c.toUInt64
             pure (.int v)
           | 'g' | 'f' | 'd' =>
-            let s ← Adbc.cellStr qr r.toUInt64 c.toUInt64
-            pure (.str s)
+            let v ← Adbc.cellFloat qr r.toUInt64 c.toUInt64
+            pure (.float v)
           | 'b' =>
             let s ← Adbc.cellStr qr r.toUInt64 c.toUInt64
             pure (.bool (s == "true"))

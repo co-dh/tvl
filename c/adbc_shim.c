@@ -590,6 +590,37 @@ lean_obj_res lean_qr_cell_int(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col,
     return lean_io_result_mk_ok(lean_int64_to_int(val));
 }
 
+// | Get cell as Float (0.0 for null/non-float)
+lean_obj_res lean_qr_cell_float(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col, lean_obj_arg world) {
+    QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
+
+    int64_t bi, lr;
+    if (!find_batch(qr, (int64_t)row, &bi, &lr)) {
+        return lean_io_result_mk_ok(lean_box_float(0.0));
+    }
+
+    if ((int64_t)col >= qr->schema.n_children) {
+        return lean_io_result_mk_ok(lean_box_float(0.0));
+    }
+
+    struct ArrowArray* batch = &qr->batches[bi];
+    struct ArrowArray* arr = batch->children[col];
+    const char* fmt = qr->schema.children[col]->format;
+
+    if (is_null(arr, lr)) {
+        return lean_io_result_mk_ok(lean_box_float(0.0));
+    }
+
+    double val = 0.0;
+    if (fmt[0] == 'g') {  // float64/double
+        val = ((const double*)arr->buffers[1])[arr->offset + lr];
+    } else if (fmt[0] == 'f') {  // float32
+        val = ((const float*)arr->buffers[1])[arr->offset + lr];
+    }
+
+    return lean_io_result_mk_ok(lean_box_float(val));
+}
+
 // | Check if cell is null
 lean_obj_res lean_qr_cell_is_null(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col, lean_obj_arg world) {
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);

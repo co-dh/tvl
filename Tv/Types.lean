@@ -31,11 +31,20 @@ theorem fmtInt_123 : fmtInt 123 = "123" := by native_decide
 theorem fmtInt_1234 : fmtInt 1234 = "1,234" := by native_decide
 theorem fmtInt_2015 : fmtInt 2015 = "2,015" := by native_decide
 
--- | Check if cell is numeric
+-- | Check if cell is numeric (for right-alignment)
 def isNum : Cell → Bool
   | .int _   => true
   | .float _ => true
   | _        => false
+
+-- | Theorem: int is numeric
+theorem int_isNum (n : Int) : (Cell.int n).isNum = true := rfl
+
+-- | Theorem: float is numeric (must right-align)
+theorem float_isNum (f : Float) : (Cell.float f).isNum = true := rfl
+
+-- | Theorem: str is not numeric
+theorem str_not_isNum (s : String) : (Cell.str s).isNum = false := rfl
 
 def toString : Cell → String
   | .null    => ""
