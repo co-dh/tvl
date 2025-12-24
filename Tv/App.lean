@@ -19,14 +19,12 @@ structure State where
   deriving Repr
 
 -- | Initialize state from file
-def init (path : String) (screenH screenW : Nat) : IO State := do
+def init (path : String) : IO State := do
   let tbl ← Csv.loadFile path
-  let rowSz := max 1 (screenH - 2)
-  let colSz := max 1 (screenW / 15)  -- rough estimate
   return {
     table := tbl
-    rowVP := Viewport.create rowSz
-    colVP := Viewport.create colSz
+    rowVP := Viewport.create
+    colVP := Viewport.create
     path := path
   }
 
@@ -42,51 +40,42 @@ def chQ : UInt32 := 113  -- 'q'
 def chCtrlC : UInt32 := 3  -- Ctrl+C
 
 -- | Handle key event
-def handleKey (s : State) (key : UInt16) (ch : UInt32) : State :=
+def handleKey (s : State) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :=
   let nr := s.table.nRows
   let nc := s.table.nCols
+  let pageSize := max 1 (screenH - 2)
   -- movement keys
   if key == Term.keyArrowDown || ch == chJ then
-    { s with rowVP := s.rowVP.moveRightBounded nr }
+    { s with rowVP := s.rowVP.moveRight nr }
   else if key == Term.keyArrowUp || ch == chK then
-    { s with rowVP := s.rowVP.moveLeftBounded }
+    { s with rowVP := s.rowVP.moveLeft }
   else if key == Term.keyArrowRight || ch == chL then
-    { s with colVP := s.colVP.moveRightBounded nc }
+    { s with colVP := s.colVP.moveRight nc }
   else if key == Term.keyArrowLeft || ch == chH then
-    { s with colVP := s.colVP.moveLeftBounded }
+    { s with colVP := s.colVP.moveLeft }
   -- page up/down
   else if key == Term.keyPageDown then
-    { s with rowVP := s.rowVP.pageDownN s.rowVP.size nr }
+    { s with rowVP := s.rowVP.pageDown pageSize nr }
   else if key == Term.keyPageUp then
-    { s with rowVP := s.rowVP.pageUpN s.rowVP.size }
+    { s with rowVP := s.rowVP.pageUp pageSize }
   -- home/end (g/G)
   else if key == Term.keyHome || ch == chG then
-    { s with rowVP := s.rowVP.goTop }
+    { s with rowVP := Viewport.goTop }
   else if key == Term.keyEnd || ch == chGG then
-    { s with rowVP := s.rowVP.goEnd nr }
+    { s with rowVP := Viewport.goEnd nr }
   -- delete column
   else if ch == chD then
     if nc > 1 then
       let newTbl := s.table.delCol s.colVP.cursor
       let newColVP := if s.colVP.cursor ≥ nc - 1
-                      then s.colVP.moveLeftBounded
+                      then s.colVP.moveLeft
                       else s.colVP
       { s with table := newTbl, colVP := newColVP }
     else s
-  -- quit (check multiple ways)
-  else if key == Term.keyEsc then
-    { s with quit := true }
-  else if ch == chQ || ch == chCtrlC then
+  -- quit
+  else if key == Term.keyEsc || ch == chQ || ch == chCtrlC then
     { s with quit := true }
   else s
-
--- | Handle resize event
-def handleResize (s : State) (w h : UInt32) : State :=
-  let rowSz := max 1 (h.toNat - 2)
-  let colSz := max 1 (w.toNat / 15)
-  { s with
-    rowVP := s.rowVP.resize rowSz
-    colVP := s.colVP.resize colSz }
 
 -- | Main event loop
 partial def loop (s : State) : IO Unit := do
@@ -100,10 +89,8 @@ partial def loop (s : State) : IO Unit := do
   -- poll event
   let ev ← Term.pollEvent
   let s' := if ev.type == Term.eventKey then
-              handleKey s ev.key ev.ch
-            else if ev.type == Term.eventResize then
-              handleResize s ev.w ev.h
-            else s
+              handleKey s ev.key ev.ch h.toNat
+            else s  -- resize handled automatically via screen queries
   loop s'
 
 -- | Run app
@@ -112,9 +99,7 @@ def run (path : String) : IO Unit := do
   if r < 0 then
     IO.eprintln "Failed to init terminal"
     return
-  let w ← Term.width
-  let h ← Term.height
-  let s ← init path h.toNat w.toNat
+  let s ← init path
   loop s
   Term.shutdown
 

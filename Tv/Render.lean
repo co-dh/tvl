@@ -36,14 +36,25 @@ def row (t : Table) (widths : Array Nat) (startCol endCol : Nat) (rowIdx : Nat)
     Term.printPad x y w.toUInt32 fg bg cell.toString
     x := x + w.toUInt32 + 1
 
--- | Calculate how many columns fit in screen width
-def fitCols (widths : Array Nat) (startCol : Nat) (screenW : Nat) : Nat :=
-  let rec go (i : Nat) (used : Nat) : Nat :=
+-- | Compute offset so cursor is visible (as last col when scrolling right)
+-- Returns (startCol, endCol)
+def visibleRange (widths : Array Nat) (cursor : Nat) (screenW : Nat) : Nat × Nat :=
+  -- Find start by going backwards from cursor until we fill screen
+  let curW := widths.getD cursor 10 + 1
+  let rec findStart (i : Nat) (used : Nat) : Nat :=
+    if i = 0 then 0
+    else
+      let w := widths.getD (i - 1) 10 + 1
+      if used + w > screenW then i else findStart (i - 1) (used + w)
+  let startCol := findStart cursor curW
+  -- Find end by going forward from start
+  let rec findEnd (i : Nat) (used : Nat) : Nat :=
     if i >= widths.size then i
     else
-      let w := widths.getD i 10 + 1  -- +1 for gap
-      if used + w > screenW then i else go (i + 1) (used + w)
-  go startCol 0
+      let w := widths.getD i 10 + 1
+      if used + w > screenW then i else findEnd (i + 1) (used + w)
+  let endCol := findEnd startCol 0
+  (startCol, endCol)
 
 -- | Render table with viewport
 def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Unit := do
@@ -51,15 +62,16 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Unit
   let widths := t.colWidths
   let curRow := rowVP.cursor
   let curCol := colVP.cursor
-  -- column range: fit as many as screen allows
-  let startCol := colVP.offset
-  let endCol := fitCols widths startCol screenW
+  -- column range: computed from cursor position
+  let (startCol, endCol) := visibleRange widths curCol screenW
+  -- row range: computed from cursor position
+  let visRows := screenH - 2
+  let startRow := if curRow < visRows then 0 else curRow - visRows + 1
+  let endRow := min t.nRows (startRow + visRows)
   -- header at y=0
   header t widths startCol endCol curCol 0
   -- data rows
-  let startRow := rowVP.offset
-  let visRows := min (screenH - 2) (t.nRows - startRow)
-  for i in [:visRows] do
+  for i in [:endRow - startRow] do
     let ri := startRow + i
     row t widths startCol endCol ri curRow curCol (i + 1).toUInt32
   Term.present
