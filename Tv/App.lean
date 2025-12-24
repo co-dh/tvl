@@ -46,12 +46,15 @@ def State.push (s : State) (v : View) : State :=
 def State.pop (s : State) : State :=
   { s with views := s.views.tailD [] }
 
+-- | Max rows to fetch (prevent OOM on huge files)
+def maxRows : Nat := 1000
+
 -- | Fetch table for view (uses cache or queries backend)
 def View.fetch (v : View) : IO (View × Table) := do
   match v.cache with
   | some t => return (v, t)
   | none =>
-    match ← Backend.query v.prql v.path with
+    match ← Backend.query (Backend.mkLimited v.prql maxRows) v.path with
     | .ok t => return ({ v with cache := some t }, t)
     | .error e =>
       IO.eprintln s!"Query error: {e}"
@@ -188,7 +191,8 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
     let col := v.colVP.cursor
     let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
     -- get distinct values for current column
-    match ← Backend.query (v.prql ++ " | select {" ++ colName ++ "} | group {" ++ colName ++ "} (take 1)") v.path with
+    let distinctPrql := v.prql ++ " | select {" ++ colName ++ "} | group {" ++ colName ++ "} (take 1)"
+    match ← Backend.query (Backend.mkLimited distinctPrql 1000) v.path with
     | .ok valTbl =>
       let vals := (List.range valTbl.nRows).map (fun r => toString (valTbl.get r 0)) |> String.intercalate "\n"
       match ← runFzf ["--prompt=Filter " ++ colName ++ ": "] vals with

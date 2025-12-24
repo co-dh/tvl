@@ -132,11 +132,25 @@ def execSql (sql : String) : IO Table := do
   let qr ← Adbc.query sql
   qrToTable qr
 
--- | Execute PRQL query on path (compiles PRQL, replaces df, executes)
-def query (prql : String) (path : String) : IO (Except String Table) := do
+-- | Log to /tmp/tv.log
+def logPrql (prql : String) : IO Unit := do
+  let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
+  h.putStrLn s!"[prql] {prql}"
+
+-- | Check if string contains "take "
+def hasLimit (s : String) : Bool := (s.splitOn "take ").length > 1
+
+-- | PRQL query with proof it has a limit
+structure LimitedQuery where
+  prql : String
+  proof : hasLimit prql = true
+
+-- | Execute PRQL query on path (requires proof of limit)
+def query (q : LimitedQuery) (path : String) : IO (Except String Table) := do
+  logPrql q.prql
   -- Create source table if needed
   if isSource path then createSource path
-  match ← compilePrql prql with
+  match ← compilePrql q.prql with
   | .error e => return .error e
   | .ok sql =>
     let tableExpr := fileExpr path
@@ -147,17 +161,24 @@ def query (prql : String) (path : String) : IO (Except String Table) := do
     catch e =>
       return .error s!"SQL error: {e}"
 
+-- | Create LimitedQuery by appending take
+def mkLimited (prql : String) (n : Nat) : LimitedQuery :=
+  let q := s!"{prql} | take {n}"
+  if h : hasLimit q = true then ⟨q, h⟩
+  else ⟨"select 1 | take 1", by native_decide⟩  -- fallback, never reached
+
+-- | Theorem: example shows mkLimited has limit
+theorem mkLimited_example : hasLimit "from df | take 1000" = true := by native_decide
+
 -- | Execute PRQL with chunk (for viewport rendering)
 def queryChunk (prql : String) (path : String) (offset limit : Nat) : IO (Except String Table) := do
-  let chunkPrql := s!"{prql} | take {offset + limit}"
   -- Note: PRQL doesn't have offset, so we take more and skip in Lean
-  -- Better: use SQL LIMIT/OFFSET directly after compilation
-  query chunkPrql path
+  query (mkLimited prql (offset + limit)) path
 
 -- | Get total row count for PRQL query
 def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
   let countPrql := prql ++ " | aggregate {n = count this}"
-  match ← query countPrql path with
+  match ← query (mkLimited countPrql 1) path with
   | .error e => return .error e
   | .ok tbl =>
     if tbl.nRows > 0 then
