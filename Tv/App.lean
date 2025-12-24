@@ -86,6 +86,12 @@ def chQ : UInt32 := 113  -- 'q'
 def chCtrlC : UInt32 := 3  -- Ctrl+C
 def chCtrlD : UInt32 := 4  -- Ctrl+D (page down)
 def chCtrlU : UInt32 := 21 -- Ctrl+U (page up)
+def chLBrack : UInt32 := 91  -- '[' sort asc
+def chRBrack : UInt32 := 93  -- ']' sort desc
+def chM : UInt32 := 77       -- 'M' meta view
+def chAt : UInt32 := 64      -- '@' column jump
+def chBackslash : UInt32 := 92 -- '\' filter
+def chS : UInt32 := 115      -- 's' select columns
 
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String
@@ -95,38 +101,130 @@ def cellToPrql : Cell → String
   | .str s => s!"'{s}'"
   | .bool b => if b then "true" else "false"
 
+-- | Run fzf picker (suspends terminal)
+def runFzf (opts : List String) (input : String) : IO (Option String) := do
+  Term.shutdown
+  let child ← IO.Process.spawn {
+    cmd := "fzf"
+    args := opts.toArray
+    stdin := .piped
+    stdout := .piped
+  }
+  child.stdin.putStr input
+  child.stdin.flush
+  let (_, child') ← child.takeStdin
+  let out ← child'.stdout.readToEnd
+  let _ ← child'.wait
+  let _ ← Term.init
+  let result := out.trim
+  return if result.isEmpty then none else some result
+
+-- | Run fzf multi-select
+def runFzfMulti (opts : List String) (input : String) : IO (List String) := do
+  Term.shutdown
+  let child ← IO.Process.spawn {
+    cmd := "fzf"
+    args := ("-m" :: opts).toArray
+    stdin := .piped
+    stdout := .piped
+  }
+  child.stdin.putStr input
+  child.stdin.flush
+  let (_, child') ← child.takeStdin
+  let out ← child'.stdout.readToEnd
+  let _ ← child'.wait
+  let _ ← Term.init
+  return out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty)
+
 -- | Handle key event (takes full Event - can't forget fields)
-def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : State :=
+def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO State := do
   let v := s.cur
   let nr := tbl.nRows
   let nc := tbl.nCols
   let pageSize := max 1 (screenH - 2)
   -- movement keys
   if ev.key == Term.keyArrowDown || ev.ch == chJ then
-    s.setCur { v with rowVP := v.rowVP.moveRight nr }
+    return s.setCur { v with rowVP := v.rowVP.moveRight nr }
   else if ev.key == Term.keyArrowUp || ev.ch == chK then
-    s.setCur { v with rowVP := v.rowVP.moveLeft }
+    return s.setCur { v with rowVP := v.rowVP.moveLeft }
   else if ev.key == Term.keyArrowRight || ev.ch == chL then
-    s.setCur { v with colVP := v.colVP.moveRight nc }
+    return s.setCur { v with colVP := v.colVP.moveRight nc }
   else if ev.key == Term.keyArrowLeft || ev.ch == chH then
-    s.setCur { v with colVP := v.colVP.moveLeft }
+    return s.setCur { v with colVP := v.colVP.moveLeft }
   -- page up/down
   else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then
-    s.setCur { v with rowVP := v.rowVP.pageDown pageSize nr }
+    return s.setCur { v with rowVP := v.rowVP.pageDown pageSize nr }
   else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then
-    s.setCur { v with rowVP := v.rowVP.pageUp pageSize }
+    return s.setCur { v with rowVP := v.rowVP.pageUp pageSize }
   -- home/end (g/G)
   else if ev.key == Term.keyHome || ev.ch == chG then
-    s.setCur { v with rowVP := Viewport.goTop }
+    return s.setCur { v with rowVP := Viewport.goTop }
   else if ev.key == Term.keyEnd || ev.ch == chGG then
-    s.setCur { v with rowVP := Viewport.goEnd nr }
+    return s.setCur { v with rowVP := Viewport.goEnd nr }
+  -- sort asc/desc
+  else if ev.ch == chLBrack then
+    let col := v.colVP.cursor
+    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let sortPrql := v.prql ++ " | sort {" ++ colName ++ "}"
+    return s.setCur (v.copy (prql := sortPrql))
+  else if ev.ch == chRBrack then
+    let col := v.colVP.cursor
+    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let sortPrql := v.prql ++ " | sort {-" ++ colName ++ "}"
+    return s.setCur (v.copy (prql := sortPrql))
+  -- delete column
+  else if ev.ch == chD then
+    let col := v.colVP.cursor
+    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let allCols := tbl.cols.toList.map (·.name) |>.filter (· != colName)
+    if allCols.length > 0 then
+      let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " allCols ++ "}"
+      let newColVP := if v.colVP.cursor ≥ nc - 1 then v.colVP.moveLeft else v.colVP
+      return s.setCur ((v.copy (prql := selPrql)).invalidate |> fun x => { x with colVP := newColVP })
+    else return s
+  -- column jump (@)
+  else if ev.ch == chAt then
+    let colNames := tbl.cols.toList.map (·.name) |> String.intercalate "\n"
+    match ← runFzf ["--prompt=Column: "] colNames with
+    | some col =>
+      match tbl.cols.toList.findIdx? (·.name == col) with
+      | some idx => return s.setCur { v with colVP := Viewport.goto idx nc }
+      | none => return s
+    | none => return s
+  -- filter (\)
+  else if ev.ch == chBackslash then
+    let col := v.colVP.cursor
+    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    -- get distinct values for current column
+    match ← Backend.query (v.prql ++ " | select {" ++ colName ++ "} | group {" ++ colName ++ "} (take 1)") v.path with
+    | .ok valTbl =>
+      let vals := (List.range valTbl.nRows).map (fun r => toString (valTbl.get r 0)) |> String.intercalate "\n"
+      match ← runFzf ["--prompt=Filter " ++ colName ++ ": "] vals with
+      | some val =>
+        let filterPrql := v.prql ++ " | filter " ++ colName ++ " == " ++ val
+        return s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create))
+      | none => return s
+    | .error _ => return s
+  -- select columns (s)
+  else if ev.ch == chS then
+    let colNames := tbl.cols.toList.map (·.name) |> String.intercalate "\n"
+    let selected ← runFzfMulti ["--prompt=Select: "] colNames
+    if selected.length > 0 then
+      let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " selected ++ "}"
+      return s.setCur (v.copy (prql := selPrql))
+    else return s
+  -- meta view
+  else if ev.ch == chM then
+    let metaPrql := v.prql ++ " | meta df"
+    let mv : View := ⟨v.path, metaPrql, Viewport.create, Viewport.create, .colMeta, none⟩
+    return s.push mv
   -- freq: push freq view with PRQL
   else if ev.ch == chF then
     let col := v.colVP.cursor
     let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
     let freqPrql := s!"{v.prql} | freq {colName} df"
     let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none⟩
-    s.push fv
+    return s.push fv
   -- enter: in freq view, filter parent by selected value
   else if ev.key == Term.keyEnter then
     match v.vkind with
@@ -138,16 +236,16 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : Stat
       | pv :: rest =>
         let filterPrql := s!"{pv.prql} | filter {colName} == {cellToPrql selVal}"
         let newPV := (pv.invalidate).copy (prql := filterPrql) (rowVP := Viewport.create)
-        { parent with views := newPV :: rest }
-      | [] => s
-    | _ => s
+        return { parent with views := newPV :: rest }
+      | [] => return s
+    | _ => return s
   -- quit/pop: pop view or quit if at root
   else if ev.key == Term.keyEsc || ev.ch == chQ then
-    if s.views.length > 1 then s.pop
-    else { s with quit := true }
+    if s.views.length > 1 then return s.pop
+    else return { s with quit := true }
   else if ev.ch == chCtrlC then
-    { s with quit := true }
-  else s
+    return { s with quit := true }
+  else return s
 
 -- | Main event loop
 partial def loop (s : State) : IO Unit := do
@@ -174,7 +272,7 @@ partial def loop (s : State) : IO Unit := do
     | [] => do
       let ev ← Term.pollEvent
       pure (ev, s)
-  let s' := if ev.type == Term.eventKey then handleKey s tbl ev h.toNat else s
+  let s' ← if ev.type == Term.eventKey then handleKey s tbl ev h.toNat else pure s
   loop s'
 
 -- | Run app with optional replay keys

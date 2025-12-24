@@ -11,6 +11,7 @@ namespace Backend
 def prqlFuncs : String := "
 let freq = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | sort {-Cnt})
 let cnt = func tbl <relation> -> (from tbl | aggregate {n = count this})
+let meta = func tbl <relation> -> (from tbl | select !{} | take 0)
 "
 
 -- | Compile PRQL to SQL using prqlc CLI (stdin → stdout)
@@ -32,12 +33,45 @@ def compilePrql (prql : String) : IO (Except String String) := do
   if code == 0 then return .ok stdout
   else return .error s!"prqlc: {stderr}"
 
--- | Generate table expression for file path
+-- | Generate table expression for file path or source
 def fileExpr (path : String) : String :=
   if path.endsWith ".parquet" then s!"read_parquet('{path}')"
   else if path.endsWith ".csv" || path.endsWith ".csv.gz" then s!"read_csv('{path}')"
   else if path.endsWith ".json" then s!"read_json('{path}')"
+  else if path.startsWith "source:" then "tv_source"
   else s!"'{path}'"
+
+-- | Check if path is a system source
+def isSource (path : String) : Bool := path.startsWith "source:"
+
+-- | Create source table in DuckDB
+def createSource (path : String) : IO Unit := do
+  let src := path.drop 7  -- remove "source:"
+  let (cmd, args, cols) := match src with
+    | "ls" => ("ls", #["-la"], "permissions,links,owner,grp,size,mon,day,time,name")
+    | "ps" => ("ps", #["aux"], "user,pid,cpu,mem,vsz,rss,tty,stat,start,time,command")
+    | "env" => ("env", #[], "name,value")
+    | "df" => ("df", #["-h"], "filesystem,size,used,avail,pct,mount")
+    | s => if s.startsWith "ls:" then ("ls", #["-la", s.drop 3], "permissions,links,owner,grp,size,mon,day,time,name")
+           else ("echo", #["unknown source"], "line")
+  let out ← IO.Process.output { cmd := cmd, args := args }
+  let lines := out.stdout.splitOn "\n" |>.filter (!·.isEmpty) |>.drop 1  -- skip header
+  if lines.isEmpty then return ()
+  -- Build INSERT statements
+  let colList := cols.splitOn ","
+  let mut vals : List String := []
+  for line in lines do
+    let parts := line.splitOn " " |>.filter (!·.isEmpty)
+    let escaped := parts.map (fun s => "'" ++ s.replace "'" "''" ++ "'")
+    -- Pad or truncate to match column count
+    let padded := escaped ++ List.replicate (colList.length - escaped.length) "''"
+    vals := vals ++ [s!"({String.intercalate ", " (padded.take colList.length)})"]
+  let createSql := s!"CREATE OR REPLACE TABLE tv_source ({cols.splitOn "," |>.map (· ++ " VARCHAR") |> String.intercalate ", "})"
+  let _ ← Adbc.query createSql
+  if vals.length > 0 then
+    let insertSql := s!"INSERT INTO tv_source VALUES {String.intercalate ", " vals}"
+    let _ ← Adbc.query insertSql
+  return ()
 
 -- | Replace "df" placeholder with actual table expression
 def replaceDf (sql : String) (tableExpr : String) : String :=
@@ -97,6 +131,8 @@ def execSql (sql : String) : IO Table := do
 
 -- | Execute PRQL query on path (compiles PRQL, replaces df, executes)
 def query (prql : String) (path : String) : IO (Except String Table) := do
+  -- Create source table if needed
+  if isSource path then createSource path
   match ← compilePrql prql with
   | .error e => return .error e
   | .ok sql =>
