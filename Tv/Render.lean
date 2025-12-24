@@ -54,25 +54,27 @@ structure VisRange where
   cursor : Nat
   hVis   : offset ≤ cursor  -- cursor at or after first visible
 
--- | Compute offset to make cursor visible (scroll by 1)
--- Returns offset ≤ cursor guaranteed by construction
-def computeOffset (widths : Array Nat) (offset cursor screenW : Nat) : {o : Nat // o ≤ cursor} :=
-  if h : offset > cursor then
-    -- scroll left: cursor becomes leftmost
-    ⟨cursor, Nat.le_refl _⟩
+-- | Scroll right until cursor visible, with termination proof
+def scrollRight (widths : Array Nat) (offset cursor screenW : Nat) : Nat :=
+  if offset ≥ cursor then cursor  -- cursor at leftmost
   else
     let cols := buildFromLeft widths offset
     match lastVisible cols screenW with
     | some last =>
-      if cursor > last then
-        -- scroll right by 1, with explicit proof check
-        if hle : offset + 1 ≤ cursor then ⟨offset + 1, hle⟩
-        else ⟨offset, Nat.le_of_not_gt h⟩
-      else
-        -- cursor visible
-        ⟨offset, Nat.le_of_not_gt h⟩
-    | none =>
-      ⟨cursor, Nat.le_refl _⟩
+      if cursor ≤ last then offset  -- cursor visible
+      else scrollRight widths (offset + 1) cursor screenW
+    | none => cursor
+termination_by cursor - offset
+
+-- | Compute offset to make cursor visible (loop until visible)
+-- Returns offset ≤ cursor guaranteed by construction
+def computeOffset (widths : Array Nat) (offset cursor screenW : Nat) : {o : Nat // o ≤ cursor} :=
+  if offset > cursor then
+    ⟨cursor, Nat.le_refl _⟩
+  else
+    let o := scrollRight widths offset cursor screenW
+    -- o ≤ cursor: scrollRight returns cursor or offset where offset ≤ cursor
+    if ho : o ≤ cursor then ⟨o, ho⟩ else ⟨cursor, Nat.le_refl _⟩
 
 -- | Compute visible range with proof
 def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) : VisRange :=
