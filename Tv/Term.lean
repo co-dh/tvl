@@ -77,9 +77,16 @@ def print (x y : UInt32) (fg bg : UInt32) (s : String) : IO Unit := do
     setCell cx y c.toNat.toUInt32 fg bg
     cx := cx + 1
 
--- | Print string, truncated/padded to width
+-- | Print string left-aligned, truncated/padded to width
 def printPad (x y w : UInt32) (fg bg : UInt32) (s : String) : IO Unit := do
   let padded := s.take w.toNat ++ String.ofList (List.replicate (w.toNat - min s.length w.toNat) ' ')
+  print x y fg bg padded
+
+-- | Print string right-aligned, truncated/padded to width
+def printPadR (x y w : UInt32) (fg bg : UInt32) (s : String) : IO Unit := do
+  let len := min s.length w.toNat
+  let pad := w.toNat - len
+  let padded := String.ofList (List.replicate pad ' ') ++ s.take w.toNat
   print x y fg bg padded
 
 end Term

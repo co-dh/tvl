@@ -13,9 +13,27 @@ inductive Cell where
 
 namespace Cell
 
+-- | Format integer with comma separators
+def fmtInt (n : Int) : String :=
+  let s := s!"{n.natAbs}"
+  let rec go (i : Nat) (acc : List Char) (cnt : Nat) : List Char :=
+    if i = 0 then acc
+    else
+      let c := s.toList.getD (s.length - i) '0'
+      let acc' := if cnt > 0 && cnt % 3 = 0 then c :: ',' :: acc else c :: acc
+      go (i - 1) acc' (cnt + 1)
+  let digits := go s.length [] 0
+  if n < 0 then "-" ++ String.ofList digits else String.ofList digits
+
+-- | Check if cell is numeric
+def isNum : Cell → Bool
+  | .int _   => true
+  | .float _ => true
+  | _        => false
+
 def toString : Cell → String
-  | .null    => "∅"
-  | .int n   => s!"{n}"
+  | .null    => ""
+  | .int n   => fmtInt n
   | .float f => s!"{f}"
   | .str s   => s
   | .bool b  => if b then "true" else "false"

@@ -33,7 +33,11 @@ def row (t : Table) (widths : Array Nat) (startCol endCol : Nat) (rowIdx : Nat)
                     else if isCurRow then (Term.white, Term.black)
                     else if isCurCol then (Term.yellow, Term.black)
                     else (Term.white, Term.black)
-    Term.printPad x y w.toUInt32 fg bg cell.toString
+    -- right-align numbers, left-align others
+    if cell.isNum then
+      Term.printPadR x y w.toUInt32 fg bg cell.toString
+    else
+      Term.printPad x y w.toUInt32 fg bg cell.toString
     x := x + w.toUInt32 + 1
 
 -- | Compute offset so cursor is visible (as last col when scrolling right)
