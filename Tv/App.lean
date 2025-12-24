@@ -92,8 +92,9 @@ def handleResize (s : State) (w h : UInt32) : State :=
 partial def loop (s : State) : IO Unit := do
   if s.quit then return ()
   -- render
+  let w ← Term.width
   let h ← Term.height
-  Render.table s.table s.rowVP s.colVP h.toNat
+  Render.table s.table s.rowVP s.colVP h.toNat w.toNat
   Render.statusBar s.path s.rowVP.cursor s.colVP.cursor
                    s.table.nRows s.table.nCols (h - 1)
   -- poll event

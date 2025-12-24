@@ -20,11 +20,16 @@ def keyEnter      : UInt16 := 0x0D
 def eventKey    : UInt8 := 1
 def eventResize : UInt8 := 2
 
--- | Colors (basic)
-def black   : UInt32 := 0x000000
-def white   : UInt32 := 0xFFFFFF
-def cyan    : UInt32 := 0x00FFFF
-def yellow  : UInt32 := 0xFFFF00
+-- | Colors (termbox2 indexed: TB_DEFAULT=0, TB_BLACK=1, ..., TB_WHITE=8)
+def default : UInt32 := 0x0000
+def black   : UInt32 := 0x0001
+def red     : UInt32 := 0x0002
+def green   : UInt32 := 0x0003
+def yellow  : UInt32 := 0x0004
+def blue    : UInt32 := 0x0005
+def magenta : UInt32 := 0x0006
+def cyan    : UInt32 := 0x0007
+def white   : UInt32 := 0x0008
 
 -- | Terminal event from poll
 structure Event where

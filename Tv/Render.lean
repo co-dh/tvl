@@ -36,15 +36,24 @@ def row (t : Table) (widths : Array Nat) (startCol endCol : Nat) (rowIdx : Nat)
     Term.printPad x y w.toUInt32 fg bg cell.toString
     x := x + w.toUInt32 + 1
 
+-- | Calculate how many columns fit in screen width
+def fitCols (widths : Array Nat) (startCol : Nat) (screenW : Nat) : Nat :=
+  let rec go (i : Nat) (used : Nat) : Nat :=
+    if i >= widths.size then i
+    else
+      let w := widths.getD i 10 + 1  -- +1 for gap
+      if used + w > screenW then i else go (i + 1) (used + w)
+  go startCol 0
+
 -- | Render table with viewport
-def table (t : Table) (rowVP colVP : Viewport) (screenH : Nat) : IO Unit := do
+def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Unit := do
   Term.clear
   let widths := t.colWidths
   let curRow := rowVP.cursor
   let curCol := colVP.cursor
-  -- column range
+  -- column range: fit as many as screen allows
   let startCol := colVP.offset
-  let endCol := min t.nCols (startCol + colVP.size)
+  let endCol := fitCols widths startCol screenW
   -- header at y=0
   header t widths startCol endCol curCol 0
   -- data rows
