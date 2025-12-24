@@ -93,40 +93,40 @@ def cellToPrql : Cell → String
   | .str s => s!"'{s}'"
   | .bool b => if b then "true" else "false"
 
--- | Handle key event (table passed from fetch)
-def handleKey (s : State) (tbl : Table) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :=
+-- | Handle key event (takes full Event - can't forget fields)
+def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : State :=
   let v := s.cur
   let nr := tbl.nRows
   let nc := tbl.nCols
   let pageSize := max 1 (screenH - 2)
   -- movement keys
-  if key == Term.keyArrowDown || ch == chJ then
+  if ev.key == Term.keyArrowDown || ev.ch == chJ then
     s.setCur { v with rowVP := v.rowVP.moveRight nr }
-  else if key == Term.keyArrowUp || ch == chK then
+  else if ev.key == Term.keyArrowUp || ev.ch == chK then
     s.setCur { v with rowVP := v.rowVP.moveLeft }
-  else if key == Term.keyArrowRight || ch == chL then
+  else if ev.key == Term.keyArrowRight || ev.ch == chL then
     s.setCur { v with colVP := v.colVP.moveRight nc }
-  else if key == Term.keyArrowLeft || ch == chH then
+  else if ev.key == Term.keyArrowLeft || ev.ch == chH then
     s.setCur { v with colVP := v.colVP.moveLeft }
   -- page up/down
-  else if key == Term.keyPageDown then
+  else if ev.key == Term.keyPageDown then
     s.setCur { v with rowVP := v.rowVP.pageDown pageSize nr }
-  else if key == Term.keyPageUp then
+  else if ev.key == Term.keyPageUp then
     s.setCur { v with rowVP := v.rowVP.pageUp pageSize }
   -- home/end (g/G)
-  else if key == Term.keyHome || ch == chG then
+  else if ev.key == Term.keyHome || ev.ch == chG then
     s.setCur { v with rowVP := Viewport.goTop }
-  else if key == Term.keyEnd || ch == chGG then
+  else if ev.key == Term.keyEnd || ev.ch == chGG then
     s.setCur { v with rowVP := Viewport.goEnd nr }
   -- freq: push freq view with PRQL
-  else if ch == chF then
+  else if ev.ch == chF then
     let col := v.colVP.cursor
     let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
     let freqPrql := s!"{v.prql} | freq {colName} df"
     let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none⟩
     s.push fv
   -- enter: in freq view, filter parent by selected value
-  else if key == Term.keyEnter then
+  else if ev.key == Term.keyEnter then
     match v.vkind with
     | .freqV colName =>
       let selRow := v.rowVP.cursor
@@ -140,10 +140,10 @@ def handleKey (s : State) (tbl : Table) (key : UInt16) (ch : UInt32) (screenH : 
       | [] => s
     | _ => s
   -- quit/pop: pop view or quit if at root
-  else if key == Term.keyEsc || ch == chQ then
+  else if ev.key == Term.keyEsc || ev.ch == chQ then
     if s.views.length > 1 then s.pop
     else { s with quit := true }
-  else if ch == chCtrlC then
+  else if ev.ch == chCtrlC then
     { s with quit := true }
   else s
 
@@ -163,14 +163,16 @@ partial def loop (s : State) : IO Unit := do
   -- update column offset
   let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
   let s := s.setCur v'
-  -- get next key: from buffer or poll
-  let (key, ch, s) ← match s.keys with
-    | c :: rest => pure (0, c.toNat.toUInt32, { s with keys := rest })
+  -- get next event: from buffer or poll
+  let (ev, s) ← match s.keys with
+    | c :: rest =>
+      -- create Event from char (key=0, ch=char)
+      let ev : Term.Event := ⟨Term.eventKey, 0, 0, c.toNat.toUInt32, 0, 0⟩
+      pure (ev, { s with keys := rest })
     | [] => do
       let ev ← Term.pollEvent
-      if ev.type == Term.eventKey then pure (ev.key, ev.ch, s)
-      else pure (0, 0, s)
-  let s' := if key != 0 || ch != 0 then handleKey s tbl key ch h.toNat else s
+      pure (ev, s)
+  let s' := if ev.type == Term.eventKey then handleKey s tbl ev h.toNat else s
   loop s'
 
 -- | Run app with optional replay keys
