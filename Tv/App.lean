@@ -84,6 +84,8 @@ def chD : UInt32 := 68   -- 'D'
 def chF : UInt32 := 70   -- 'F' for freq
 def chQ : UInt32 := 113  -- 'q'
 def chCtrlC : UInt32 := 3  -- Ctrl+C
+def chCtrlD : UInt32 := 4  -- Ctrl+D (page down)
+def chCtrlU : UInt32 := 21 -- Ctrl+U (page up)
 
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String
@@ -109,9 +111,9 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : Stat
   else if ev.key == Term.keyArrowLeft || ev.ch == chH then
     s.setCur { v with colVP := v.colVP.moveLeft }
   -- page up/down
-  else if ev.key == Term.keyPageDown then
+  else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then
     s.setCur { v with rowVP := v.rowVP.pageDown pageSize nr }
-  else if ev.key == Term.keyPageUp then
+  else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then
     s.setCur { v with rowVP := v.rowVP.pageUp pageSize }
   -- home/end (g/G)
   else if ev.key == Term.keyHome || ev.ch == chG then
