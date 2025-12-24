@@ -34,10 +34,11 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol : Nat) (y : UInt
     else
       Term.printPad x.toUInt32 y w.toUInt32 fg bg cell.toString
 
--- | Build all columns from offset (termbox clips at screen edge)
-def buildFromLeft (widths : Array Nat) (offset : Nat) : Array ColPos :=
+-- | Build columns from offset up to maxX (screen width + buffer)
+def buildFromLeft (widths : Array Nat) (offset maxX : Nat) : Array ColPos :=
   let rec go (i x : Nat) (acc : Array ColPos) : Array ColPos :=
     if i >= widths.size then acc
+    else if x > maxX then acc  -- stop past screen edge
     else
       let w := widths.getD i 10
       go (i + 1) (x + w + 1) (acc.push (i, x, w))
@@ -58,7 +59,7 @@ structure VisRange where
 def scrollRight (widths : Array Nat) (offset cursor screenW : Nat) : Nat :=
   if offset ≥ cursor then cursor  -- cursor at leftmost
   else
-    let cols := buildFromLeft widths offset
+    let cols := buildFromLeft widths offset screenW
     match lastVisible cols screenW with
     | some last =>
       if cursor ≤ last then offset  -- cursor visible
@@ -79,7 +80,7 @@ def computeOffset (widths : Array Nat) (offset cursor screenW : Nat) : {o : Nat 
 -- | Compute visible range with proof
 def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) : VisRange :=
   let ⟨newOffset, hVis⟩ := computeOffset widths offset cursor screenW
-  let cols := buildFromLeft widths newOffset
+  let cols := buildFromLeft widths newOffset screenW
   ⟨cols, newOffset, cursor, hVis⟩
 
 -- | Render table with viewport, returns new column offset
