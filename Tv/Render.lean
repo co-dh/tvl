@@ -34,54 +34,53 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol : Nat) (y : UInt
     else
       Term.printPad x.toUInt32 y w.toUInt32 fg bg cell.toString
 
--- | Build columns from offset up to maxX (screen width + buffer)
-def buildFromLeft (widths : Array Nat) (offset maxX : Nat) : Array ColPos :=
-  let rec go (i x : Nat) (acc : Array ColPos) : Array ColPos :=
-    if i >= widths.size then acc
-    else if x > maxX then acc  -- stop past screen edge
-    else
-      let w := widths.getD i 10
-      go (i + 1) (x + w + 1) (acc.push (i, x, w))
-  go offset 0 #[]
+-- | Cumulative x positions: cumX[i] = start x of column i from offset 0
+def cumX (widths : Array Nat) : Array Nat :=
+  widths.foldl (init := #[0]) fun acc w => acc.push (acc.back! + w + 1)
 
--- | Find last fully visible column index given screen width
-def lastVisible (cols : Array ColPos) (screenW : Nat) : Option Nat :=
-  cols.findRev? (fun (_, x, w) => x + w ≤ screenW) |>.map (·.1)
+-- | Build visible columns from offset (stop at screenW)
+def buildCols (widths : Array Nat) (cx : Array Nat) (offset screenW : Nat) : Array ColPos :=
+  let x0 := cx.getD offset 0  -- x of first visible col from global origin
+  let rec go (i : Nat) (acc : Array ColPos) : Array ColPos :=
+    if i >= widths.size then acc
+    else
+      let x := cx.getD i 0 - x0  -- relative x from offset
+      if x > screenW then acc
+      else go (i + 1) (acc.push (i, x, widths.getD i 10))
+  go offset #[]
+
+-- | Find offset to make cursor visible using cumX
+def findOffset (widths : Array Nat) (cx : Array Nat) (offset cursor screenW : Nat) : Nat :=
+  if offset > cursor then cursor  -- scroll left
+  else
+    let curEnd := cx.getD cursor 0 + widths.getD cursor 10  -- cursor right edge
+    let offX := cx.getD offset 0  -- offset left edge
+    if curEnd - offX ≤ screenW then offset  -- cursor visible
+    else
+      -- find smallest o where cx[o] ≥ curEnd - screenW
+      let minX := curEnd - screenW
+      let rec search (o : Nat) : Nat :=
+        if o ≥ cursor then cursor
+        else if cx.getD o 0 ≥ minX then o
+        else search (o + 1)
+      termination_by cursor - o
+      search offset
 
 -- | Visible range with proof cursor is visible
 structure VisRange where
   cols   : Array ColPos
   offset : Nat
   cursor : Nat
-  hVis   : offset ≤ cursor  -- cursor at or after first visible
+  hVis   : offset ≤ cursor
 
--- | Scroll right until cursor visible, with termination proof
-def scrollRight (widths : Array Nat) (offset cursor screenW : Nat) : Nat :=
-  if offset ≥ cursor then cursor  -- cursor at leftmost
-  else
-    let cols := buildFromLeft widths offset screenW
-    match lastVisible cols screenW with
-    | some last =>
-      if cursor ≤ last then offset  -- cursor visible
-      else scrollRight widths (offset + 1) cursor screenW
-    | none => cursor
-termination_by cursor - offset
-
--- | Compute offset to make cursor visible (loop until visible)
--- Returns offset ≤ cursor guaranteed by construction
-def computeOffset (widths : Array Nat) (offset cursor screenW : Nat) : {o : Nat // o ≤ cursor} :=
-  if offset > cursor then
-    ⟨cursor, Nat.le_refl _⟩
-  else
-    let o := scrollRight widths offset cursor screenW
-    -- o ≤ cursor: scrollRight returns cursor or offset where offset ≤ cursor
-    if ho : o ≤ cursor then ⟨o, ho⟩ else ⟨cursor, Nat.le_refl _⟩
-
--- | Compute visible range with proof
+-- | Compute visible range (builds cumX once)
 def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) : VisRange :=
-  let ⟨newOffset, hVis⟩ := computeOffset widths offset cursor screenW
-  let cols := buildFromLeft widths newOffset screenW
-  ⟨cols, newOffset, cursor, hVis⟩
+  let cx := cumX widths
+  let o := findOffset widths cx offset cursor screenW
+  if h : o ≤ cursor then
+    ⟨buildCols widths cx o screenW, o, cursor, h⟩
+  else
+    ⟨buildCols widths cx cursor screenW, cursor, cursor, Nat.le_refl _⟩
 
 -- | Render table with viewport, returns new column offset
 def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Nat := do
