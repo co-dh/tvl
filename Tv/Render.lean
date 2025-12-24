@@ -34,51 +34,73 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol : Nat) (y : UInt
     else
       Term.printPad x.toUInt32 y w.toUInt32 fg bg cell.toString
 
--- | Visible columns with right-alignment proof
-structure VisRange where
-  cols    : Array ColPos           -- visible columns with positions
-  screenW : Nat
-  hAlign  : cols.back?.map (fun (_, x, w) => x + w) = some screenW
+-- | Build columns left-to-right from offset
+def buildFromLeft (widths : Array Nat) (offset screenW : Nat) : Array ColPos :=
+  let rec go (i x : Nat) (acc : Array ColPos) : Array ColPos :=
+    if i >= widths.size then acc
+    else
+      let w := widths.getD i 10
+      if x + w > screenW then acc
+      else go (i + 1) (x + w + 1) (acc.push (i, x, w))
+  go offset 0 #[]
 
--- | Compute visible columns right-to-left from cursor
--- Cursor column ends at screenW, previous columns go left
-def visibleRange (widths : Array Nat) (cursor : Nat) (screenW : Nat) : VisRange :=
-  let curW := min (widths.getD cursor 10) screenW  -- clamp to screenW
+-- | Build columns right-to-left ending at screenW (cursor at right edge)
+def buildFromRight (widths : Array Nat) (cursor screenW : Nat) : Array ColPos :=
+  let curW := min (widths.getD cursor 10) screenW
   let curX := screenW - curW
-  -- build columns right-to-left
-  let rec goLeft (i : Nat) (x : Nat) (acc : Array ColPos) : Array ColPos :=
+  let rec goLeft (i x : Nat) (acc : Array ColPos) : Array ColPos :=
     if i = 0 then acc
     else
       let w := widths.getD (i - 1) 10
-      if w + 1 > x then acc  -- no room (need gap too)
-      else
-        let x' := x - w - 1
-        goLeft (i - 1) x' (#[(i - 1, x', w)] ++ acc)
-  let leftCols := goLeft cursor curX #[]
-  let cols := leftCols.push (cursor, curX, curW)
-  have hCurW : curW ≤ screenW := Nat.min_le_right _ _
-  have hAlign : curX + curW = screenW := Nat.sub_add_cancel hCurW
-  ⟨cols, screenW, by simp [Array.back?, cols, hAlign]⟩
+      if w + 1 > x then acc
+      else goLeft (i - 1) (x - w - 1) (#[(i - 1, x - w - 1, w)] ++ acc)
+  (goLeft cursor curX #[]).push (cursor, curX, curW)
 
--- | Render table with viewport
-def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Unit := do
+-- | Get first/last column index from cols
+def colRange (cols : Array ColPos) : Option (Nat × Nat) :=
+  match cols[0]?, cols.back? with
+  | some (f, _, _), some (l, _, _) => some (f, l)
+  | _, _ => none
+
+-- | Compute visible columns based on offset and cursor
+-- Left-align from offset, scroll right/left when cursor out of view
+def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) : Array ColPos × Nat :=
+  let cols := buildFromLeft widths offset screenW
+  match colRange cols with
+  | some (first, last) =>
+    if cursor > last then
+      -- scroll right: cursor at right edge
+      (buildFromRight widths cursor screenW, cursor)
+    else if cursor < first then
+      -- scroll left: cursor at left edge
+      (buildFromLeft widths cursor screenW, cursor)
+    else
+      -- cursor visible, keep current offset
+      (cols, offset)
+  | none =>
+    -- no columns fit, just show cursor column
+    (buildFromRight widths cursor screenW, cursor)
+
+-- | Render table with viewport, returns new column offset
+def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Nat := do
   Term.clear
   let widths := t.colWidths
   let curRow := rowVP.cursor
   let curCol := colVP.cursor
-  -- visible columns: right-aligned from cursor
-  let vr := visibleRange widths curCol screenW
+  -- visible columns based on offset and cursor
+  let (cols, newOffset) := visibleRange widths colVP.offset curCol screenW
   -- row range: computed from cursor position (header + status = 2)
   let visRows := screenH - 2
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
   let endRow := min t.nRows (startRow + visRows)
   -- header at y=0
-  header t vr.cols curCol 0
+  header t cols curCol 0
   -- data rows start at y=1
   for i in [:endRow - startRow] do
     let ri := startRow + i
-    row t vr.cols ri curRow curCol (i + 1).toUInt32
+    row t cols ri curRow curCol (i + 1).toUInt32
   Term.present
+  return newOffset
 
 -- | Render status bar at bottom
 def statusBar (path : String) (curRow curCol nRows nCols : Nat) (y : UInt32) : IO Unit := do

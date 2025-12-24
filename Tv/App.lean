@@ -80,12 +80,14 @@ def handleKey (s : State) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :
 -- | Main event loop
 partial def loop (s : State) : IO Unit := do
   if s.quit then return ()
-  -- render
+  -- render and get new column offset
   let w ← Term.width
   let h ← Term.height
-  Render.table s.table s.rowVP s.colVP h.toNat w.toNat
+  let newColOffset ← Render.table s.table s.rowVP s.colVP h.toNat w.toNat
   Render.statusBar s.path s.rowVP.cursor s.colVP.cursor
                    s.table.nRows s.table.nCols (h - 1)
+  -- update column offset
+  let s := { s with colVP := ⟨s.colVP.cursor, newColOffset⟩ }
   -- poll event
   let ev ← Term.pollEvent
   let s' := if ev.type == Term.eventKey then
