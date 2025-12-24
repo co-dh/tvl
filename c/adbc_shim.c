@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <dlfcn.h>
 
 /* === ADBC Structures (from Arrow ADBC spec) === */
@@ -119,6 +120,18 @@ static void* g_lib = NULL;
 static struct AdbcDatabase g_db = {0};
 static struct AdbcConnection g_conn = {0};
 static int g_initialized = 0;
+static FILE* g_log = NULL;
+
+/* === Logging to file === */
+static void log_msg(const char* fmt, ...) {
+    if (!g_log) g_log = fopen("/tmp/tv.log", "a");
+    if (!g_log) return;
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(g_log, fmt, args);
+    va_end(args);
+    fflush(g_log);
+}
 
 /* === Helper: init error struct === */
 static void init_error(struct AdbcError* err) {
@@ -138,12 +151,12 @@ static int load_adbc_funcs(void) {
     for (int i = 0; paths[i]; i++) {
         g_lib = dlopen(paths[i], RTLD_NOW | RTLD_GLOBAL);
         if (g_lib) {
-            fprintf(stderr, "[adbc] loaded %s\n", paths[i]);
+            log_msg("[adbc] loaded %s\n", paths[i]);
             break;
         }
     }
     if (!g_lib) {
-        fprintf(stderr, "[adbc] dlopen failed: %s\n", dlerror());
+        log_msg("[adbc] dlopen failed: %s\n", dlerror());
         return 0;
     }
 
@@ -173,7 +186,7 @@ lean_obj_res lean_adbc_init(lean_obj_arg world) {
 
     // Load functions via dlopen
     if (!load_adbc_funcs()) {
-        fprintf(stderr, "[adbc] load_adbc_funcs failed\n");
+        log_msg( "[adbc] load_adbc_funcs failed\n");
         return lean_io_result_mk_ok(lean_box(0));
     }
 
@@ -182,14 +195,14 @@ lean_obj_res lean_adbc_init(lean_obj_arg world) {
 
     // Create database
     if (pAdbcDatabaseNew(&g_db, &err) != ADBC_STATUS_OK) {
-        fprintf(stderr, "[adbc] DatabaseNew failed: %s\n", err.message ? err.message : "?");
+        log_msg( "[adbc] DatabaseNew failed: %s\n", err.message ? err.message : "?");
         free_error(&err);
         return lean_io_result_mk_ok(lean_box(0));
     }
 
     // Set driver to duckdb
     if (pAdbcDatabaseSetOption(&g_db, "driver", "/usr/lib/libduckdb.so", &err) != ADBC_STATUS_OK) {
-        fprintf(stderr, "[adbc] DatabaseSetOption(driver) failed: %s\n", err.message ? err.message : "?");
+        log_msg( "[adbc] DatabaseSetOption(driver) failed: %s\n", err.message ? err.message : "?");
         pAdbcDatabaseRelease(&g_db, &err);
         free_error(&err);
         return lean_io_result_mk_ok(lean_box(0));
@@ -197,7 +210,7 @@ lean_obj_res lean_adbc_init(lean_obj_arg world) {
 
     // Set entrypoint
     if (pAdbcDatabaseSetOption(&g_db, "entrypoint", "duckdb_adbc_init", &err) != ADBC_STATUS_OK) {
-        fprintf(stderr, "[adbc] DatabaseSetOption(entrypoint) failed: %s\n", err.message ? err.message : "?");
+        log_msg( "[adbc] DatabaseSetOption(entrypoint) failed: %s\n", err.message ? err.message : "?");
         pAdbcDatabaseRelease(&g_db, &err);
         free_error(&err);
         return lean_io_result_mk_ok(lean_box(0));
@@ -205,7 +218,7 @@ lean_obj_res lean_adbc_init(lean_obj_arg world) {
 
     // Set path="" for in-memory
     if (pAdbcDatabaseSetOption(&g_db, "path", "", &err) != ADBC_STATUS_OK) {
-        fprintf(stderr, "[adbc] DatabaseSetOption(path) failed: %s\n", err.message ? err.message : "?");
+        log_msg( "[adbc] DatabaseSetOption(path) failed: %s\n", err.message ? err.message : "?");
         pAdbcDatabaseRelease(&g_db, &err);
         free_error(&err);
         return lean_io_result_mk_ok(lean_box(0));
@@ -213,7 +226,7 @@ lean_obj_res lean_adbc_init(lean_obj_arg world) {
 
     // Init database
     if (pAdbcDatabaseInit(&g_db, &err) != ADBC_STATUS_OK) {
-        fprintf(stderr, "[adbc] DatabaseInit failed: %s\n", err.message ? err.message : "?");
+        log_msg( "[adbc] DatabaseInit failed: %s\n", err.message ? err.message : "?");
         pAdbcDatabaseRelease(&g_db, &err);
         free_error(&err);
         return lean_io_result_mk_ok(lean_box(0));
@@ -221,7 +234,7 @@ lean_obj_res lean_adbc_init(lean_obj_arg world) {
 
     // Create connection
     if (pAdbcConnectionNew(&g_conn, &err) != ADBC_STATUS_OK) {
-        fprintf(stderr, "[adbc] ConnectionNew failed: %s\n", err.message ? err.message : "?");
+        log_msg( "[adbc] ConnectionNew failed: %s\n", err.message ? err.message : "?");
         pAdbcDatabaseRelease(&g_db, &err);
         free_error(&err);
         return lean_io_result_mk_ok(lean_box(0));
@@ -229,14 +242,14 @@ lean_obj_res lean_adbc_init(lean_obj_arg world) {
 
     // Init connection
     if (pAdbcConnectionInit(&g_conn, &g_db, &err) != ADBC_STATUS_OK) {
-        fprintf(stderr, "[adbc] ConnectionInit failed: %s\n", err.message ? err.message : "?");
+        log_msg( "[adbc] ConnectionInit failed: %s\n", err.message ? err.message : "?");
         pAdbcConnectionRelease(&g_conn, &err);
         pAdbcDatabaseRelease(&g_db, &err);
         free_error(&err);
         return lean_io_result_mk_ok(lean_box(0));
     }
 
-    fprintf(stderr, "[adbc] initialized OK\n");
+    log_msg( "[adbc] initialized OK\n");
     g_initialized = 1;
     return lean_io_result_mk_ok(lean_box(1));
 }
