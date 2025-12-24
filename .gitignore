@@ -1,0 +1,8 @@
+.lake/
+lake-packages/
+*.olean
+*.ilean
+*.trace
+*.o
+*.a
+/tv
