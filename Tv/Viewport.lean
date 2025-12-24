@@ -48,4 +48,18 @@ def adjustOffset (v : Viewport) (firstVisible lastVisible : Nat) : Viewport :=
   else if v.cursor < firstVisible then ⟨v.cursor, v.cursor⟩  -- scroll left
   else v  -- cursor visible, keep offset
 
+-- | Theorem: right key moves cursor to next column (when not at end)
+theorem moveRight_inc (v : Viewport) (maxIdx : Nat) (h : v.cursor + 1 < maxIdx) :
+    (v.moveRight maxIdx).cursor = v.cursor + 1 := by
+  unfold moveRight
+  have : ¬(v.cursor ≥ maxIdx - 1) := by omega
+  simp [this]
+
+-- | Theorem: right key stays at end
+theorem moveRight_end (v : Viewport) (maxIdx : Nat) (h : v.cursor + 1 ≥ maxIdx) :
+    (v.moveRight maxIdx).cursor = v.cursor := by
+  unfold moveRight
+  have : v.cursor ≥ maxIdx - 1 := by omega
+  simp [this]
+
 end Viewport

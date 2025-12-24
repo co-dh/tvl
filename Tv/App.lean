@@ -164,13 +164,13 @@ partial def loop (s : State) : IO Unit := do
   let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
   let s := s.setCur v'
   -- get next key: from buffer or poll
-  let (ch, s) ← match s.keys with
-    | c :: rest => pure (c.toNat.toUInt32, { s with keys := rest })
+  let (key, ch, s) ← match s.keys with
+    | c :: rest => pure (0, c.toNat.toUInt32, { s with keys := rest })
     | [] => do
       let ev ← Term.pollEvent
-      if ev.type == Term.eventKey then pure (ev.ch, s)
-      else pure (0, s)
-  let s' := if ch != 0 then handleKey s tbl 0 ch h.toNat else s
+      if ev.type == Term.eventKey then pure (ev.key, ev.ch, s)
+      else pure (0, 0, s)
+  let s' := if key != 0 || ch != 0 then handleKey s tbl key ch h.toNat else s
   loop s'
 
 -- | Run app with optional replay keys
