@@ -38,6 +38,17 @@ def toString : Cell → String
   | .str s   => s
   | .bool b  => if b then "true" else "false"
 
+-- | Cell equality
+def eq : Cell → Cell → Bool
+  | .null, .null => true
+  | .int a, .int b => a == b
+  | .float a, .float b => a == b
+  | .str a, .str b => a == b
+  | .bool a, .bool b => a == b
+  | _, _ => false
+
+instance : BEq Cell where beq := eq
+
 end Cell
 
 -- | Column metadata
@@ -85,5 +96,34 @@ def delCol (t : Table) (idx : Nat) : Table :=
 
 -- | Access cached widths
 def colWidths (t : Table) : Array Nat := t.widths
+
+-- | Filter rows where column c equals value v
+def filter (t : Table) (c : Nat) (v : Cell) : Table :=
+  let newRows := t.rows.filter fun row => row.getD c .null == v
+  create t.cols newRows
+
+-- | Build bar string with # chars
+def mkBar (pct : Nat) (maxW : Nat := 20) : String :=
+  let n := min maxW (pct * maxW / 100)
+  String.ofList (List.replicate n '#')
+
+-- | Frequency table for column c: (value, count, pct, bar) sorted by count desc
+def freq (t : Table) (c : Nat) : Table :=
+  let colName := t.cols.getD c ⟨"?"⟩ |>.name
+  let total := t.nRows
+  -- count occurrences using fold
+  let counts := t.rows.foldl (init := #[]) fun acc row =>
+    let v := row.getD c .null
+    match acc.findIdx? (·.1 == v) with
+    | some i => acc.set! i (v, acc[i]!.2 + 1)
+    | none => acc.push (v, 1)
+  -- sort by count descending
+  let sorted := counts.qsort (fun a b => a.2 > b.2)
+  -- build result table with pct and bar
+  let cols := #[⟨colName⟩, ⟨"Cnt"⟩, ⟨"Pct"⟩, ⟨"Bar"⟩]
+  let rows := sorted.map fun (v, n) =>
+    let pct := if total > 0 then n * 100 / total else 0
+    #[v, .int n, .str s!"{pct}%", .str (mkBar pct)]
+  create cols rows
 
 end Table
