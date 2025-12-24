@@ -10,7 +10,13 @@ import Tv.Backend
 namespace App
 
 -- | View kind: how to render/interact
-inductive ViewKind where | tbl | freqV (col : String) | colMeta | fld deriving Inhabited
+inductive ViewKind where
+  | tbl                    -- table view
+  | freqV (col : String)   -- frequency view for column
+  | colMeta                -- column metadata
+  | fld                    -- folder browser
+  | info (col row : Nat)   -- info box for cell
+  deriving Inhabited
 
 -- | Single view with PRQL query
 structure View where
@@ -20,6 +26,7 @@ structure View where
   colVP  : Viewport
   vkind  : ViewKind := .tbl
   cache  : Option Table := none  -- cached result
+  keyCols : List Nat := []       -- key columns for aggregate/pivot
 
 -- | App state with view stack
 structure State where
@@ -29,7 +36,7 @@ structure State where
   quit   : Bool := false
 
 -- | Default empty view
-def View.empty : View := ⟨"", "from df", Viewport.create, Viewport.create, .tbl, none⟩
+def View.empty : View := ⟨"", "from df", Viewport.create, Viewport.create, .tbl, none, []⟩
 
 -- | Current view
 def State.cur (s : State) : View := s.views.headD View.empty
@@ -45,6 +52,18 @@ def State.push (s : State) (v : View) : State :=
 -- | Pop view (returns to parent)
 def State.pop (s : State) : State :=
   { s with views := s.views.tailD [] }
+
+-- | Swap top two views
+def State.swapViews (s : State) : State :=
+  match s.views with
+  | v1 :: v2 :: rest => { s with views := v2 :: v1 :: rest }
+  | _ => s
+
+-- | Duplicate current view
+def State.dupView (s : State) : State :=
+  match s.views with
+  | v :: _ => { s with views := v :: s.views }
+  | [] => s
 
 -- | Max rows to fetch (prevent OOM on huge files)
 def maxRows : Nat := 1000
@@ -87,6 +106,10 @@ def chM : UInt32 := 77       -- 'M' meta view
 def chAt : UInt32 := 64      -- '@' column jump
 def chBackslash : UInt32 := 92 -- '\' filter
 def chS : UInt32 := 115      -- 's' select columns
+def chI : UInt32 := 73       -- 'I' info box
+def chT : UInt32 := 84       -- 'T' duplicate view
+def chSS : UInt32 := 83      -- 'S' swap views
+def chExcl : UInt32 := 33    -- '!' toggle key column
 
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String
@@ -143,9 +166,11 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   else if ev.key == Term.keyArrowUp || ev.ch == chK then
     return s.setCur { v with rowVP := v.rowVP.moveLeft }
   else if ev.key == Term.keyArrowRight || ev.ch == chL then
-    return s.setCur { v with colVP := v.colVP.moveRight nc }
+    let next := Render.nextInDisplay v.keyCols nc v.colVP.cursor
+    return s.setCur { v with colVP := ⟨next, v.colVP.offset⟩ }
   else if ev.key == Term.keyArrowLeft || ev.ch == chH then
-    return s.setCur { v with colVP := v.colVP.moveLeft }
+    let prev := Render.prevInDisplay v.keyCols nc v.colVP.cursor
+    return s.setCur { v with colVP := ⟨prev, v.colVP.offset⟩ }
   -- page up/down
   else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then
     return s.setCur { v with rowVP := v.rowVP.pageDown pageSize nr }
@@ -212,14 +237,20 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   -- meta view
   else if ev.ch == chM then
     let metaPrql := v.prql ++ " | meta df"
-    let mv : View := ⟨v.path, metaPrql, Viewport.create, Viewport.create, .colMeta, none⟩
+    let mv : View := ⟨v.path, metaPrql, Viewport.create, Viewport.create, .colMeta, none, []⟩
     return s.push mv
+  -- info box (I) - show cell/column details
+  else if ev.ch == chI then
+    let col := v.colVP.cursor
+    let row := v.rowVP.cursor
+    let iv : View := ⟨v.path, v.prql, Viewport.create, Viewport.create, .info col row, v.cache, v.keyCols⟩
+    return s.push iv
   -- freq: push freq view with PRQL
   else if ev.ch == chF then
     let col := v.colVP.cursor
     let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
     let freqPrql := v.prql ++ " | freq " ++ colName
-    let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none⟩
+    let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none, []⟩
     return s.push fv
   -- enter: in freq view, filter parent by selected value
   else if ev.key == Term.keyEnter then
@@ -235,6 +266,19 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
         return { parent with views := newPV :: rest }
       | [] => return s
     | _ => return s
+  -- duplicate view (T)
+  else if ev.ch == chT then
+    return s.dupView
+  -- swap top two views (S)
+  else if ev.ch == chSS then
+    return s.swapViews
+  -- toggle key column (!)
+  else if ev.ch == chExcl then
+    let col := v.colVP.cursor
+    let newKeys := if v.keyCols.contains col
+      then v.keyCols.filter (· != col)
+      else v.keyCols ++ [col]
+    return s.setCur { v with keyCols := newKeys }
   -- dump table to stdout and quit (Q)
   else if ev.ch == chQQ then
     Term.shutdown
@@ -262,12 +306,18 @@ partial def loop (s : State) : IO Unit := do
   -- fetch table (uses cache if available)
   let (v', tbl) ← v.fetch
   let s := s.setCur v'
-  -- render
+  -- render based on view kind
   let w ← Term.width
   let h ← Term.height
-  let newColOffset ← Render.table tbl v'.rowVP v'.colVP h.toNat w.toNat
-  Render.statusBar v'.path v'.rowVP.cursor v'.colVP.cursor
-                   tbl.nRows tbl.nCols (h - 1)
+  let (newColOffset, s) ← match v'.vkind with
+    | .info col row =>
+      Render.infoBox tbl col row h.toNat w.toNat
+      pure (v'.colVP.offset, s)
+    | _ =>
+      let off ← Render.table tbl v'.rowVP v'.colVP h.toNat w.toNat v'.keyCols
+      Render.statusBar v'.path v'.rowVP.cursor tbl.nRows
+                       s.views.length v'.keyCols tbl.cols (h - 1)
+      pure (off, s)
   -- update column offset
   let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
   let s := s.setCur v'
@@ -294,7 +344,7 @@ def run (path : String) (keys : String := "") : IO Unit := do
   if r < 0 then
     IO.eprintln "Failed to init terminal"
     return
-  let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none⟩
+  let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none, []⟩
   let s : State := { views := [v], keys := keys.toList }
   loop s
   Backend.shutdown

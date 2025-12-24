@@ -82,33 +82,139 @@ def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) : VisRange :
   else
     ⟨buildCols widths cx cursor screenW, cursor, cursor, Nat.le_refl _⟩
 
--- | Render table with viewport, returns new column offset
-def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Nat := do
+-- | Key columns come first in display order
+def keyColsFirst (keyCols : List Nat) (allCols : List Nat) : Bool :=
+  allCols.take keyCols.length == keyCols
+
+-- | Theorem: key columns are at the start of combined column list
+theorem keyColsFirst_append (ks : List Nat) (rest : List Nat) :
+    keyColsFirst ks (ks ++ rest) = true := by
+  simp [keyColsFirst]
+
+-- | Theorem: empty key columns trivially first
+theorem keyColsFirst_empty (rest : List Nat) :
+    keyColsFirst [] rest = true := by simp [keyColsFirst]
+
+-- | Display order: key columns first, then rest
+def displayOrder (keyCols : List Nat) (nCols : Nat) : List Nat :=
+  keyCols ++ (List.range nCols).filter (!keyCols.contains ·)
+
+-- | Navigation should follow display order (next column in display)
+def nextInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
+  let order := displayOrder keyCols nCols
+  match order.findIdx? (· == cur) with
+  | some i => order.getD (i + 1) cur  -- next in order, or stay
+  | none => cur
+
+def prevInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
+  let order := displayOrder keyCols nCols
+  match order.findIdx? (· == cur) with
+  | some 0 => cur  -- at start, stay
+  | some i => order.getD (i - 1) cur
+  | none => cur
+
+-- | Theorem: next in display advances in display order (concrete example)
+-- keyCols=[1], 3 cols → display order is [1,0,2], cursor on 1 → next is 0
+theorem nextInDisplay_example :
+    nextInDisplay [1] 3 1 = 0 := by native_decide
+
+-- | Theorem: with no key cols, next is just increment
+theorem nextInDisplay_noKeys :
+    nextInDisplay [] 5 2 = 3 := by native_decide
+
+-- | Theorem: prev from first key col stays (can't go left of leftmost)
+theorem prevInDisplay_atStart :
+    prevInDisplay [1] 3 1 = 1 := by native_decide
+
+-- | Theorem: prev from non-key goes to key col
+theorem prevInDisplay_toKey :
+    prevInDisplay [1] 3 0 = 1 := by native_decide
+
+-- | Render table with viewport and key columns, returns new column offset
+def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
+          (keyCols : List Nat := []) : IO Nat := do
   Term.clear
   let widths := t.colWidths
   let curRow := rowVP.cursor
   let curCol := colVP.cursor
-  -- visible columns with proof cursor is visible
-  let vr := visibleRange widths colVP.offset curCol screenW
-  let cols := vr.cols
-  let newOffset := vr.offset
-  -- row range: computed from cursor position (header + status = 2)
+  -- compute key columns width (pinned left)
+  let keyW := keyCols.foldl (fun acc i => acc + (widths.getD i 10) + 1) 0
+  let sepW := if keyCols.isEmpty then 0 else 1  -- width of | separator
+  let restW := screenW - keyW - sepW
+  -- build key column positions (always visible, starting at x=0)
+  let mut keyPos : Array ColPos := #[]
+  let mut kx : Nat := 0
+  for i in keyCols do
+    let w := widths.getD i 10
+    keyPos := keyPos.push (i, kx, w)
+    kx := kx + w + 1
+  -- non-key columns (scrollable, after separator)
+  let nonKeyCols := (List.range t.nCols).filter (!keyCols.contains ·)
+  let nonKeyWidths := nonKeyCols.map (widths.getD · 10) |>.toArray
+  -- find cursor in non-key columns for scrolling
+  let cursorInNonKey := nonKeyCols.findIdx? (· == curCol) |>.getD 0
+  let vr := visibleRange nonKeyWidths colVP.offset cursorInNonKey restW
+  -- build non-key column positions (offset by keyW + sepW)
+  let startX := keyW + sepW
+  let nonKeyPos := vr.cols.map fun (i, x, w) => (nonKeyCols.getD i 0, startX + x, w)
+  -- combine: key cols + non-key cols
+  let cols := keyPos ++ nonKeyPos
+  -- row range
   let visRows := screenH - 2
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
   let endRow := min t.nRows (startRow + visRows)
-  -- header at y=0
+  -- render header
   header t cols curCol 0
-  -- data rows start at y=1
+  -- render separator in header
+  if !keyCols.isEmpty then
+    Term.print (keyW).toUInt32 0 Term.white Term.black "|"
+  -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
     row t cols ri curRow curCol (i + 1).toUInt32
+    -- render separator for each row
+    if !keyCols.isEmpty then
+      Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.white Term.black "|"
   Term.present
-  return newOffset
+  return vr.offset
 
 -- | Render status bar at bottom
-def statusBar (path : String) (curRow curCol nRows nCols : Nat) (y : UInt32) : IO Unit := do
-  let pos := s!"{curRow + 1}/{nRows} {curCol + 1}/{nCols}"
-  let msg := s!"{path}  {pos}"
+def statusBar (path : String) (curRow nRows viewCnt : Nat)
+              (keyCols : List Nat) (cols : Array Column) (y : UInt32) : IO Unit := do
+  let pos := s!"{curRow + 1}/{nRows}"
+  let viewStr := if viewCnt > 1 then s!"[{viewCnt}] " else ""
+  let keyStr := if keyCols.isEmpty then ""
+    else " !" ++ String.intercalate "," (keyCols.map fun i => (cols.getD i default).name)
+  let msg := s!"{viewStr}{path}  {pos}{keyStr}"
   Term.print 0 y Term.cyan Term.black msg
+
+-- | Render info box (centered overlay)
+def infoBox (t : Table) (col row : Nat) (screenH screenW : Nat) : IO Unit := do
+  Term.clear
+  let colName := t.cols.getD col default |>.name
+  let cell := t.get row col
+  let cellStr := cell.toString
+  let cellLen := cellStr.length
+  -- box content
+  let lines := #[
+    s!"Column: {colName}",
+    s!"Row: {row + 1}/{t.nRows}",
+    s!"Value: {cellStr}",
+    s!"Length: {cellLen}",
+    s!"Type: {match cell with | .null => "null" | .int _ => "int" | .float _ => "float" | .str _ => "str" | .bool _ => "bool"}"
+  ]
+  let boxW := lines.foldl (fun m l => max m l.length) 20
+  let boxH := lines.size + 2
+  let x0 := (screenW - boxW - 4) / 2
+  let y0 := (screenH - boxH) / 2
+  -- draw box
+  Term.print x0.toUInt32 y0.toUInt32 Term.white Term.blue (String.ofList (List.replicate (boxW + 4) ' '))
+  for i in [:lines.size] do
+    let line := lines.getD i ""
+    let padded := line ++ String.ofList (List.replicate (boxW - line.length) ' ')
+    Term.print x0.toUInt32 (y0 + i + 1).toUInt32 Term.white Term.blue s!"  {padded}  "
+  Term.print x0.toUInt32 (y0 + boxH - 1).toUInt32 Term.white Term.blue (String.ofList (List.replicate (boxW + 4) ' '))
+  Term.print x0.toUInt32 (y0 + boxH).toUInt32 Term.cyan Term.black "Press q or Esc to close"
+  Term.present
 
 end Render
