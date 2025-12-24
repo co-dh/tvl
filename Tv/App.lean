@@ -24,6 +24,7 @@ structure View where
 -- | App state with view stack
 structure State where
   views  : List View      -- head is current, tail is parent stack
+  keys   : List Char := [] -- pending keys to replay
   msg    : String := ""   -- status message
   quit   : Bool := false
 
@@ -63,14 +64,14 @@ def View.invalidate (v : View) : View := { v with cache := none }
 def View.copy (v : View) (prql : String := v.prql) (rowVP : Viewport := v.rowVP) : View :=
   { v with prql := prql, rowVP := rowVP, cache := none }
 
--- | Initialize state from file
-def init (path : String) : IO State := do
+-- | Initialize state from file with optional replay keys
+def init (path : String) (keys : String := "") : IO State := do
   let ok ← Backend.init
   if !ok then
     IO.eprintln "Failed to init backend"
     return { views := [], quit := true }
   let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none⟩
-  return { views := [v] }
+  return { views := [v], keys := keys.toList }
 
 -- | Character codes
 def chJ : UInt32 := 106
@@ -162,20 +163,23 @@ partial def loop (s : State) : IO Unit := do
   -- update column offset
   let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
   let s := s.setCur v'
-  -- poll event
-  let ev ← Term.pollEvent
-  let s' := if ev.type == Term.eventKey then
-              handleKey s tbl ev.key ev.ch h.toNat
-            else s
+  -- get next key: from buffer or poll
+  let (ch, s) ← match s.keys with
+    | c :: rest => pure (c.toNat.toUInt32, { s with keys := rest })
+    | [] => do
+      let ev ← Term.pollEvent
+      if ev.type == Term.eventKey then pure (ev.ch, s)
+      else pure (0, s)
+  let s' := if ch != 0 then handleKey s tbl 0 ch h.toNat else s
   loop s'
 
--- | Run app
-def run (path : String) : IO Unit := do
+-- | Run app with optional replay keys
+def run (path : String) (keys : String := "") : IO Unit := do
   let r ← Term.init
   if r < 0 then
     IO.eprintln "Failed to init terminal"
     return
-  let s ← init path
+  let s ← init path keys
   loop s
   Backend.shutdown
   Term.shutdown
