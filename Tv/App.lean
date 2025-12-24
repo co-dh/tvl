@@ -64,15 +64,6 @@ def View.invalidate (v : View) : View := { v with cache := none }
 def View.copy (v : View) (prql : String := v.prql) (rowVP : Viewport := v.rowVP) : View :=
   { v with prql := prql, rowVP := rowVP, cache := none }
 
--- | Initialize state from file with optional replay keys
-def init (path : String) (keys : String := "") : IO State := do
-  let ok ← Backend.init
-  if !ok then
-    IO.eprintln "Failed to init backend"
-    return { views := [], quit := true }
-  let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none⟩
-  return { views := [v], keys := keys.toList }
-
 -- | Character codes
 def chJ : UInt32 := 106
 def chK : UInt32 := 107
@@ -290,11 +281,17 @@ partial def loop (s : State) : IO Unit := do
 
 -- | Run app with optional replay keys
 def run (path : String) (keys : String := "") : IO Unit := do
+  -- init backend before terminal (debug output goes to normal screen)
+  let ok ← Backend.init
+  if !ok then
+    IO.eprintln "Failed to init backend"
+    return
   let r ← Term.init
   if r < 0 then
     IO.eprintln "Failed to init terminal"
     return
-  let s ← init path keys
+  let v : View := ⟨path, "from df", Viewport.create, Viewport.create, .tbl, none⟩
+  let s : State := { views := [v], keys := keys.toList }
   loop s
   Backend.shutdown
   Term.shutdown
