@@ -83,6 +83,7 @@ def chGG : UInt32 := 71  -- 'G'
 def chD : UInt32 := 68   -- 'D'
 def chF : UInt32 := 70   -- 'F' for freq
 def chQ : UInt32 := 113  -- 'q'
+def chQQ : UInt32 := 81  -- 'Q' dump table
 def chCtrlC : UInt32 := 3  -- Ctrl+C
 def chCtrlD : UInt32 := 4  -- Ctrl+D (page down)
 def chCtrlU : UInt32 := 21 -- Ctrl+U (page up)
@@ -239,6 +240,18 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
         return { parent with views := newPV :: rest }
       | [] => return s
     | _ => return s
+  -- dump table to stdout and quit (Q)
+  else if ev.ch == chQQ then
+    Term.shutdown
+    IO.println s!"PRQL: {v.prql}"
+    IO.println s!"Rows: {tbl.nRows}, Cols: {tbl.nCols}"
+    -- header
+    IO.println (tbl.cols.toList.map (·.name) |> String.intercalate "\t")
+    -- rows (max 50)
+    for r in [:min tbl.nRows 50] do
+      let row := (List.range tbl.nCols).map (fun c => toString (tbl.get r c)) |> String.intercalate "\t"
+      IO.println row
+    return { s with quit := true }
   -- quit/pop: pop view or quit if at root
   else if ev.key == Term.keyEsc || ev.ch == chQ then
     if s.views.length > 1 then return s.pop

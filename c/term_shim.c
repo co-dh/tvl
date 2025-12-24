@@ -64,3 +64,30 @@ lean_obj_res lean_tb_poll_event(lean_obj_arg world) {
     data[15] = ev.mod;                        // mod: 2nd UInt8
     return lean_io_result_mk_ok(obj);
 }
+
+// tb_buffer_str() -> String (screen as string, no escape sequences)
+lean_obj_res lean_tb_buffer_str(lean_obj_arg world) {
+    int w = tb_width();
+    int h = tb_height();
+    struct tb_cell *buf = tb_cell_buffer();
+    if (!buf || w <= 0 || h <= 0) {
+        char hdr[64];
+        snprintf(hdr, sizeof(hdr), "(no buffer: %dx%d buf=%p)\n", w, h, (void*)buf);
+        return lean_io_result_mk_ok(lean_mk_string(hdr));
+    }
+    // w chars per row + newline, for h rows
+    char *str = malloc((size_t)(w + 1) * h + 1);
+    if (!str) return lean_io_result_mk_ok(lean_mk_string("(malloc fail)"));
+    size_t pos = 0;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint32_t ch = buf[y * w + x].ch;
+            str[pos++] = (ch >= 32 && ch < 127) ? (char)ch : ' ';
+        }
+        str[pos++] = '\n';
+    }
+    str[pos] = '\0';
+    lean_object *res = lean_mk_string(str);
+    free(str);
+    return lean_io_result_mk_ok(res);
+}
