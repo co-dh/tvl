@@ -13,17 +13,23 @@ inductive Cell where
 
 namespace Cell
 
--- | Format integer with comma separators
+-- | Format integer with comma separators (iterate right-to-left)
 def fmtInt (n : Int) : String :=
   let s := s!"{n.natAbs}"
-  let rec go (i : Nat) (acc : List Char) (cnt : Nat) : List Char :=
-    if i = 0 then acc
-    else
-      let c := s.toList.getD (s.length - i) '0'
+  let chars := s.toList.reverse  -- start from least significant
+  let rec go (cs : List Char) (acc : List Char) (cnt : Nat) : List Char :=
+    match cs with
+    | [] => acc
+    | c :: rest =>
       let acc' := if cnt > 0 && cnt % 3 = 0 then c :: ',' :: acc else c :: acc
-      go (i - 1) acc' (cnt + 1)
-  let digits := go s.length [] 0
+      go rest acc' (cnt + 1)
+  let digits := go chars []  0
   if n < 0 then "-" ++ String.ofList digits else String.ofList digits
+
+-- | Theorem: fmtInt preserves digit order (no reversal)
+theorem fmtInt_123 : fmtInt 123 = "123" := by native_decide
+theorem fmtInt_1234 : fmtInt 1234 = "1,234" := by native_decide
+theorem fmtInt_2015 : fmtInt 2015 = "2,015" := by native_decide
 
 -- | Check if cell is numeric
 def isNum : Cell → Bool
