@@ -7,13 +7,13 @@ import Tv.Term
 
 namespace Render
 
--- | Render header row (with column viewport)
+-- | Render header row with underline attribute
 def header (t : Table) (widths : Array Nat) (startCol endCol selCol : Nat) (y : UInt32) : IO Unit := do
   let mut x : UInt32 := 0
   for i in [startCol:endCol] do
     let col := t.cols.getD i default
     let w := widths.getD i 10
-    let fg := if i == selCol then Term.black else Term.cyan
+    let fg := if i == selCol then Term.black else Term.cyan ||| Term.underline
     let bg := if i == selCol then Term.cyan else Term.black
     Term.printPad x y w.toUInt32 fg bg col.name
     x := x + w.toUInt32 + 1
@@ -64,13 +64,13 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat) : IO Unit
   let curCol := colVP.cursor
   -- column range: computed from cursor position
   let (startCol, endCol) := visibleRange widths curCol screenW
-  -- row range: computed from cursor position
+  -- row range: computed from cursor position (header + status = 2)
   let visRows := screenH - 2
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
   let endRow := min t.nRows (startRow + visRows)
   -- header at y=0
   header t widths startCol endCol curCol 0
-  -- data rows
+  -- data rows start at y=1
   for i in [:endRow - startRow] do
     let ri := startRow + i
     row t widths startCol endCol ri curRow curCol (i + 1).toUInt32

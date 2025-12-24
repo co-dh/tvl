@@ -43,7 +43,7 @@ def chCtrlC : UInt32 := 3  -- Ctrl+C
 def handleKey (s : State) (key : UInt16) (ch : UInt32) (screenH : Nat) : State :=
   let nr := s.table.nRows
   let nc := s.table.nCols
-  let pageSize := max 1 (screenH - 2)
+  let pageSize := max 1 (screenH - 2)  -- header + status
   -- movement keys
   if key == Term.keyArrowDown || ch == chJ then
     { s with rowVP := s.rowVP.moveRight nr }

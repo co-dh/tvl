@@ -31,6 +31,10 @@ def magenta : UInt32 := 0x0006
 def cyan    : UInt32 := 0x0007
 def white   : UInt32 := 0x0008
 
+-- | Attributes (OR with color)
+def bold      : UInt32 := 0x01000000
+def underline : UInt32 := 0x02000000
+
 -- | Terminal event from poll
 structure Event where
   type : UInt8
