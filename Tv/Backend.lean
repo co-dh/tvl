@@ -11,7 +11,6 @@ namespace Backend
 def prqlFuncs : String := "
 let freq = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | sort {-Cnt})
 let cnt = func tbl <relation> -> (from tbl | aggregate {n = count this})
-let meta = func tbl <relation> -> (from tbl | select !{} | take 0)
 "
 
 -- | Compile PRQL to SQL using prqlc CLI (stdin → stdout)

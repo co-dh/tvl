@@ -222,7 +222,7 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   else if ev.ch == chF then
     let col := v.colVP.cursor
     let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
-    let freqPrql := s!"{v.prql} | freq {colName} df"
+    let freqPrql := v.prql ++ " | freq " ++ colName
     let fv : View := ⟨v.path, freqPrql, Viewport.create, Viewport.create, .freqV colName, none⟩
     return s.push fv
   -- enter: in freq view, filter parent by selected value
