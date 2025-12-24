@@ -1,53 +1,44 @@
--- Test ADBC integration
+-- Test ADBC + Backend integration
 import Tv.Adbc
+import Tv.Backend
 
 def main : IO Unit := do
   IO.println "Testing ADBC..."
 
-  -- Init
-  let ok ← Adbc.init
+  -- Init backend
+  let ok ← Backend.init
   if !ok then
-    IO.println "Failed to init ADBC"
+    IO.println "Failed to init Backend"
     return
-  IO.println "ADBC initialized"
+  IO.println "Backend initialized"
 
-  -- Query
-  let qr ← Adbc.query "SELECT 1 as a, 'hello' as b, 3.14 as c"
-  let nc ← Adbc.ncols qr
-  let nr ← Adbc.nrows qr
-  IO.println s!"Result: {nr} rows, {nc} cols"
+  -- Test PRQL compilation
+  IO.println "\nTesting PRQL compilation..."
+  match ← Backend.compilePrql "from df | select {a, b}" with
+  | .error e => IO.println s!"PRQL error: {e}"
+  | .ok sql => IO.println s!"SQL: {sql}"
 
-  -- Print column names
-  for i in [:nc.toNat] do
-    let name ← Adbc.colName qr i.toUInt64
-    let fmt ← Adbc.colFmt qr i.toUInt64
-    IO.println s!"  col {i}: {name} ({fmt})"
-
-  -- Print data
-  for r in [:nr.toNat] do
-    for c in [:nc.toNat] do
-      let v ← Adbc.cellStr qr r.toUInt64 c.toUInt64
-      IO.print s!"{v}\t"
+  -- Test query with PRQL
+  IO.println "\nTesting PRQL query on CSV..."
+  match ← Backend.query "from df | take 3" "data/basic.csv" with
+  | .error e => IO.println s!"Query error: {e}"
+  | .ok tbl =>
+    IO.println s!"Table: {tbl.nRows} rows, {tbl.nCols} cols"
+    -- Print header
+    for c in tbl.cols do IO.print s!"{c.name}\t"
     IO.println ""
+    -- Print rows
+    for r in [:tbl.nRows] do
+      for c in [:tbl.nCols] do
+        IO.print s!"{tbl.get r c}\t"
+      IO.println ""
 
-  -- Test CSV file
-  IO.println "\nTesting CSV read..."
-  let qr2 ← Adbc.query "SELECT * FROM read_csv('data/basic.csv') LIMIT 5"
-  let nc2 ← Adbc.ncols qr2
-  let nr2 ← Adbc.nrows qr2
-  IO.println s!"CSV: {nr2} rows, {nc2} cols"
-
-  for c in [:nc2.toNat] do
-    let name ← Adbc.colName qr2 c.toUInt64
-    IO.print s!"{name}\t"
-  IO.println ""
-
-  for r in [:nr2.toNat] do
-    for c in [:nc2.toNat] do
-      let v ← Adbc.cellStr qr2 r.toUInt64 c.toUInt64
-      IO.print s!"{v}\t"
-    IO.println ""
+  -- Test count
+  IO.println "\nTesting row count..."
+  match ← Backend.queryCount "from df" "data/basic.csv" with
+  | .error e => IO.println s!"Count error: {e}"
+  | .ok n => IO.println s!"Total rows: {n}"
 
   -- Shutdown
-  Adbc.shutdown
+  Backend.shutdown
   IO.println "\nDone"

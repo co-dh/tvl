@@ -48,6 +48,7 @@ def eq : Cell → Cell → Bool
   | _, _ => false
 
 instance : BEq Cell where beq := eq
+instance : ToString Cell where toString := toString
 
 end Cell
 

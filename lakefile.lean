@@ -5,7 +5,7 @@ package tv where
   moreLinkArgs := #["-L/usr/local/lib", "-ltermbox2", "-Wl,--allow-shlib-undefined"]
 
 lean_lib Tv where
-  roots := #[`Tv.Types, `Tv.Viewport, `Tv.Term, `Tv.Csv, `Tv.Render, `Tv.App, `Tv.Adbc]
+  roots := #[`Tv.Types, `Tv.Viewport, `Tv.Term, `Tv.Csv, `Tv.Render, `Tv.App, `Tv.Adbc, `Tv.Backend]
 
 @[default_target]
 lean_exe tv where

@@ -351,18 +351,18 @@ def loadKeymap (path : String) : IO Keymap
 
 ## Implementation Order
 
-| Step | Files | Description |
-|------|-------|-------------|
-| 1 | c/adbc_shim.c | ADBC + Arrow C FFI bindings |
-| 2 | Tv/Adbc.lean | ADBC Lean interface |
-| 3 | Tv/Backend.lean | Query execution + cache |
-| 4 | Tv/Prql.lean | PRQL compilation (prqlc subprocess) |
-| 5 | Tv/Types.lean | Add ViewKind sum type |
-| 6 | Tv/State.lean | Enhanced state with PRQL chain |
-| 7 | Tv/Command.lean | Command ADT |
-| 8 | Tv/App.lean | ViewKind dispatch + commands |
-| 9 | Tv/Source.lean | System sources |
-| 10 | Tv/Keymap.lean | Configurable keybindings |
+| Step | Files           | Description                         |
+|------|-------          |-------------                        |
+| 1    | c/adbc_shim.c   | ADBC + Arrow C FFI bindings         |
+| 2    | Tv/Adbc.lean    | ADBC Lean interface                 |
+| 3    | Tv/Backend.lean | Query execution + cache             |
+| 4    | Tv/Prql.lean    | PRQL compilation (prqlc subprocess) |
+| 5    | Tv/Types.lean   | Add ViewKind sum type               |
+| 6    | Tv/State.lean   | Enhanced state with PRQL chain      |
+| 7    | Tv/Command.lean | Command ADT                         |
+| 8    | Tv/App.lean     | ViewKind dispatch + commands        |
+| 9    | Tv/Source.lean  | System sources                      |
+| 10   | Tv/Keymap.lean  | Configurable keybindings            |
 
 ---
 
