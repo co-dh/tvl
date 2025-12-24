@@ -7,10 +7,10 @@ import Tv.Term
 
 namespace Render
 
--- | Render header row
-def header (t : Table) (widths : Array Nat) (selCol : Nat) (y : UInt32) : IO Unit := do
+-- | Render header row (with column viewport)
+def header (t : Table) (widths : Array Nat) (startCol endCol selCol : Nat) (y : UInt32) : IO Unit := do
   let mut x : UInt32 := 0
-  for i in [:t.cols.size] do
+  for i in [startCol:endCol] do
     let col := t.cols.getD i default
     let w := widths.getD i 10
     let fg := if i == selCol then Term.black else Term.cyan
@@ -18,13 +18,13 @@ def header (t : Table) (widths : Array Nat) (selCol : Nat) (y : UInt32) : IO Uni
     Term.printPad x y w.toUInt32 fg bg col.name
     x := x + w.toUInt32 + 1
 
--- | Render single data row
-def row (t : Table) (widths : Array Nat) (rowIdx : Nat) (curRow curCol : Nat)
-        (y : UInt32) : IO Unit := do
+-- | Render single data row (with column viewport)
+def row (t : Table) (widths : Array Nat) (startCol endCol : Nat) (rowIdx : Nat)
+        (curRow curCol : Nat) (y : UInt32) : IO Unit := do
   let cells := t.rows.getD rowIdx #[]
   let isCurRow := rowIdx == curRow
   let mut x : UInt32 := 0
-  for i in [:t.nCols] do
+  for i in [startCol:endCol] do
     let cell := cells.getD i .null
     let w := widths.getD i 10
     let isCurCol := i == curCol
@@ -42,14 +42,17 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH : Nat) : IO Unit := do
   let widths := t.colWidths
   let curRow := rowVP.cursor
   let curCol := colVP.cursor
+  -- column range
+  let startCol := colVP.offset
+  let endCol := min t.nCols (startCol + colVP.size)
   -- header at y=0
-  header t widths curCol 0
+  header t widths startCol endCol curCol 0
   -- data rows
   let startRow := rowVP.offset
   let visRows := min (screenH - 2) (t.nRows - startRow)
   for i in [:visRows] do
     let ri := startRow + i
-    row t widths ri curRow curCol (i + 1).toUInt32
+    row t widths startCol endCol ri curRow curCol (i + 1).toUInt32
   Term.present
 
 -- | Render status bar at bottom

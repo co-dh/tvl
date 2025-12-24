@@ -4,11 +4,15 @@
 
 namespace Term
 
--- | Key codes
+-- | Key codes (from termbox2.h)
 def keyArrowUp    : UInt16 := 0xFFFF - 18
 def keyArrowDown  : UInt16 := 0xFFFF - 19
 def keyArrowLeft  : UInt16 := 0xFFFF - 20
 def keyArrowRight : UInt16 := 0xFFFF - 21
+def keyPageUp     : UInt16 := 0xFFFF - 23
+def keyPageDown   : UInt16 := 0xFFFF - 24
+def keyHome       : UInt16 := 0xFFFF - 25
+def keyEnd        : UInt16 := 0xFFFF - 26
 def keyEsc        : UInt16 := 0x1B
 def keyEnter      : UInt16 := 0x0D
 

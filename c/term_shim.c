@@ -50,14 +50,17 @@ lean_obj_res lean_tb_poll_event(lean_obj_arg world) {
     struct tb_event ev;
     tb_poll_event(&ev);
 
-    // Create Event structure: type, mod, key, ch, w, h
-    lean_object* obj = lean_alloc_ctor(0, 0, 6 * sizeof(uint32_t));
-    lean_ctor_set_uint8(obj, 0, ev.type);
-    lean_ctor_set_uint8(obj, 1, ev.mod);
-    lean_ctor_set_uint16(obj, 2, ev.key);
-    lean_ctor_set_uint32(obj, 4, ev.ch);
-    lean_ctor_set_uint32(obj, 8, (uint32_t)ev.w);
-    lean_ctor_set_uint32(obj, 12, (uint32_t)ev.h);
-
+    // Create Event structure
+    // Lean 4 sorts scalars by SIZE DESC, then declaration order
+    // UInt32 (ch,w,h) | UInt16 (key) | UInt8 (type,mod) = 16 bytes
+    lean_object* obj = lean_alloc_ctor(0, 0, 16);
+    uint8_t* data = (uint8_t*)lean_ctor_scalar_cptr(obj);
+    // Layout: UInt32s by decl order, then UInt16, then UInt8s by decl order
+    *(uint32_t*)(data + 0) = ev.ch;           // ch: 1st UInt32
+    *(uint32_t*)(data + 4) = (uint32_t)ev.w;  // w: 2nd UInt32
+    *(uint32_t*)(data + 8) = (uint32_t)ev.h;  // h: 3rd UInt32
+    *(uint16_t*)(data + 12) = ev.key;         // key: UInt16
+    data[14] = ev.type;                       // type: 1st UInt8
+    data[15] = ev.mod;                        // mod: 2nd UInt8
     return lean_io_result_mk_ok(obj);
 }

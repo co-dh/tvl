@@ -30,21 +30,42 @@ def init (path : String) (screenH screenW : Nat) : IO State := do
     path := path
   }
 
+-- | Character codes
+def chJ : UInt32 := 106
+def chK : UInt32 := 107
+def chL : UInt32 := 108
+def chH : UInt32 := 104
+def chG : UInt32 := 103
+def chGG : UInt32 := 71  -- 'G'
+def chD : UInt32 := 68   -- 'D'
+def chQ : UInt32 := 113  -- 'q'
+def chCtrlC : UInt32 := 3  -- Ctrl+C
+
 -- | Handle key event
 def handleKey (s : State) (key : UInt16) (ch : UInt32) : State :=
   let nr := s.table.nRows
   let nc := s.table.nCols
   -- movement keys
-  if key == Term.keyArrowDown || ch == 'j'.toNat.toUInt32 then
+  if key == Term.keyArrowDown || ch == chJ then
     { s with rowVP := s.rowVP.moveRightBounded nr }
-  else if key == Term.keyArrowUp || ch == 'k'.toNat.toUInt32 then
+  else if key == Term.keyArrowUp || ch == chK then
     { s with rowVP := s.rowVP.moveLeftBounded }
-  else if key == Term.keyArrowRight || ch == 'l'.toNat.toUInt32 then
+  else if key == Term.keyArrowRight || ch == chL then
     { s with colVP := s.colVP.moveRightBounded nc }
-  else if key == Term.keyArrowLeft || ch == 'h'.toNat.toUInt32 then
+  else if key == Term.keyArrowLeft || ch == chH then
     { s with colVP := s.colVP.moveLeftBounded }
+  -- page up/down
+  else if key == Term.keyPageDown then
+    { s with rowVP := s.rowVP.pageDownN s.rowVP.size nr }
+  else if key == Term.keyPageUp then
+    { s with rowVP := s.rowVP.pageUpN s.rowVP.size }
+  -- home/end (g/G)
+  else if key == Term.keyHome || ch == chG then
+    { s with rowVP := s.rowVP.goTop }
+  else if key == Term.keyEnd || ch == chGG then
+    { s with rowVP := s.rowVP.goEnd nr }
   -- delete column
-  else if ch == 'D'.toNat.toUInt32 then
+  else if ch == chD then
     if nc > 1 then
       let newTbl := s.table.delCol s.colVP.cursor
       let newColVP := if s.colVP.cursor ≥ nc - 1
@@ -52,8 +73,10 @@ def handleKey (s : State) (key : UInt16) (ch : UInt32) : State :=
                       else s.colVP
       { s with table := newTbl, colVP := newColVP }
     else s
-  -- quit
-  else if key == Term.keyEsc || ch == 'q'.toNat.toUInt32 then
+  -- quit (check multiple ways)
+  else if key == Term.keyEsc then
+    { s with quit := true }
+  else if ch == chQ || ch == chCtrlC then
     { s with quit := true }
   else s
 

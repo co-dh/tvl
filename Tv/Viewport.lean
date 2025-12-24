@@ -70,4 +70,30 @@ def moveRightBounded (v : Viewport) (maxIdx : Nat) : Viewport :=
 -- | Move left (already handles 0 bound)
 def moveLeftBounded (v : Viewport) : Viewport := v.moveLeft
 
+-- | Page down (move cursor by n, with bounds check)
+def pageDownN (v : Viewport) (n maxIdx : Nat) : Viewport :=
+  if maxIdx = 0 then v
+  else
+    let rec go (v : Viewport) (i : Nat) : Viewport :=
+      if i = 0 then v
+      else if v.cursor ≥ maxIdx - 1 then v
+      else go v.moveRight (i - 1)
+    go v n
+
+-- | Page up (move cursor by n)
+def pageUpN (v : Viewport) (n : Nat) : Viewport :=
+  let rec go (v : Viewport) (i : Nat) : Viewport :=
+    if i = 0 then v
+    else go v.moveLeft (i - 1)
+  go v n
+
+-- | Go to start
+def goTop (v : Viewport) : Viewport :=
+  create v.size v.hpos
+
+-- | Go to end
+def goEnd (v : Viewport) (maxIdx : Nat) : Viewport :=
+  if maxIdx = 0 then v
+  else pageDownN (goTop v) (maxIdx - 1) maxIdx
+
 end Viewport
