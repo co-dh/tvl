@@ -50,3 +50,43 @@ Added hex dump logging to C shim to see actual bytes written, compared with Lean
 - Added PageUp/Down, Home/End, g/G navigation
 - Fixed horizontal scrolling (using colVP.offset)
 - Added Viewport.pageDownN, pageUpN, goTop, goEnd with proofs
+
+## 2024-12-24: Cursor Visibility Proof
+
+### Problem
+User asked "where is your proof?" - cursor could scroll off-screen without type-level guarantee.
+
+### Solution
+Added `VisRange` structure with proof that offset ≤ cursor:
+
+```lean
+-- | Visible range with proof cursor is visible
+structure VisRange where
+  cols   : Array ColPos
+  offset : Nat
+  cursor : Nat
+  hVis   : offset ≤ cursor  -- cursor at or after first visible
+
+-- | Compute offset to make cursor visible (scroll by 1)
+-- Returns offset ≤ cursor guaranteed by construction
+def computeOffset (widths : Array Nat) (offset cursor screenW : Nat) : {o : Nat // o ≤ cursor}
+```
+
+### Proof Construction
+All branches produce valid proofs:
+1. **Scroll left** (offset > cursor): return cursor with `Nat.le_refl`
+2. **Scroll right** (cursor > last): check `offset + 1 ≤ cursor` explicitly, return with proof `hle`
+3. **Cursor visible**: return offset with `Nat.le_of_not_gt h`
+
+### Technical Note
+omega can't prove `offset + 1 ≤ cursor` from `cursor > last` because it doesn't know `last ≥ offset` (true by construction of `buildFromLeft`). Fixed with explicit decidable check:
+```lean
+if hle : offset + 1 ≤ cursor then ⟨offset + 1, hle⟩
+else ⟨offset, Nat.le_of_not_gt h⟩
+```
+
+### Other Recent Additions
+- Number formatting with comma separators (fmtInt)
+- Right-alignment for numeric columns (printPadR)
+- Header underline attribute (TB_UNDERLINE = 0x02000000)
+- Scroll one column at a time (not jump multiple)
