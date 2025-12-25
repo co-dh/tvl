@@ -18,7 +18,7 @@ def header (t : Table) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
     let isSel := selCols.contains i
     let (fg, bg) := if i == selCol then (Term.black, Term.cyan)
                     else if isSel then (Term.black, Term.magenta)
-                    else (Term.cyan ||| Term.underline, Term.black)
+                    else (Term.cyan ||| Term.underline, Term.default)
     Term.printPad x.toUInt32 y w.toUInt32 fg bg col.name
 
 -- | Render single data row with decimal precision (highlights selected columns)
@@ -32,10 +32,10 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
     let isSel := selCols.contains i
     let (fg, bg) := if isCursor then (Term.black, Term.white)
                     else if isSel && isCurRow then (Term.black, Term.magenta)
-                    else if isSel then (Term.magenta, Term.black)
-                    else if isCurRow then (Term.white, Term.black)
-                    else if i == curCol then (Term.yellow, Term.black)
-                    else (Term.white, Term.black)
+                    else if isSel then (Term.magenta, Term.default)
+                    else if isCurRow then (Term.default, Term.default)
+                    else if i == curCol then (Term.yellow, Term.default)
+                    else (Term.default, Term.default)
     let cellStr := cell.toStringD decimals
     if cell.isNum then
       Term.printPadR x.toUInt32 y w.toUInt32 fg bg cellStr
@@ -176,14 +176,14 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
   header t cols curCol 0 selCols
   -- render separator in header
   if !keyCols.isEmpty then
-    Term.print (keyW).toUInt32 0 Term.white Term.black "|"
+    Term.print (keyW).toUInt32 0 Term.default Term.default "|"
   -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
     row t cols ri curRow curCol decimals (i + 1).toUInt32 selCols
     -- render separator for each row
     if !keyCols.isEmpty then
-      Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.white Term.black "|"
+      Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.default Term.default "|"
   return (vr.offset, cols, keyW)
 
 -- | Format number with comma separators (1000000 -> "1,000,000")
@@ -263,9 +263,9 @@ def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
   let mb ← memMB
   let right := s!"{mb}MB {curRow}/{fmtNum total}"
   -- print left, then right-aligned position
-  Term.print 0 y Term.cyan Term.black left
+  Term.print 0 y Term.cyan Term.default left
   let rx := screenW - right.length
-  Term.print rx.toUInt32 y Term.cyan Term.black right
+  Term.print rx.toUInt32 y Term.cyan Term.default right
 
 -- | Key bindings for info overlay (2 columns: key | hint)
 def keyHints : List (String × String) := [
