@@ -211,6 +211,21 @@ def test_freq_by_key_columns : IO Unit := do
   assert (contains tab "freq city") s!"Tab should show freq city: {tab}"
   assert (!contains hdr "name") s!"Header should not contain name: {hdr}"
 
+def test_freq_multi_key_columns : IO Unit := do
+  -- Set keys on a and b, then F should freq by both
+  let output ← runKeys "!l!F" "tests/data/multi_freq.csv"
+  let (tab, _) := footer output
+  let hdr := header output
+  assert (contains tab "freq a,b") s!"Tab should show freq a,b: {tab}"
+  assert (contains hdr "Cnt") s!"Header should have Cnt: {hdr}"
+
+def test_freq_multi_key_enter : IO Unit := do
+  -- Set keys on a and b, F, then Enter filters parent by both
+  let output ← runKeys "!l!F<ret>" "tests/data/multi_freq.csv"
+  let (_, status) := footer output
+  -- First row of freq (a=1,b=x or a=2,b=y with count 2) filters to 2 rows
+  assert (endsWith status "/2") s!"Should filter to 2 rows: {status}"
+
 def test_decimal_increase : IO Unit := do
   let output ← runKeys "." "tests/data/floats.csv"
   -- After '.', decimals goes from 3 to 4: 1.1234 (truncated, not rounded)
@@ -306,6 +321,8 @@ def main : IO Unit := do
   test_toggle_key_selected_cols
   test_freq_after_meta
   test_freq_by_key_columns
+  test_freq_multi_key_columns
+  test_freq_multi_key_enter
   test_decimal_increase
   test_decimal_decrease
   test_swap_views
