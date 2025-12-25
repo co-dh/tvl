@@ -259,6 +259,26 @@ def test_meta_select_rows_xkey_parent : IO Unit := do
   let (tab, _) := footer output
   assert (contains tab "meta") s!"Should show meta: {tab}"
 
+def test_meta_0_select_null_cols : IO Unit := do
+  -- null_col.csv has a,b where b is all null
+  -- M0 should select row 1 (b column)
+  let output ← runKeys "M0" "tests/data/null_col.csv"
+  let (_, status) := footer output
+  assert (contains status "sel=1") s!"Should select 1 column with nulls: {status}"
+
+def test_meta_1_select_single_val_cols : IO Unit := do
+  -- single_val.csv has a,b where b has only 'x' (dist=1)
+  -- M1 should select row 1 (b column)
+  let output ← runKeys "M1" "tests/data/single_val.csv"
+  let (_, status) := footer output
+  assert (contains status "sel=1") s!"Should select 1 column with single value: {status}"
+
+def test_meta_enter_sets_keycols : IO Unit := do
+  -- Select b column in meta (row 1), press enter, should see key col in parent
+  let output ← runKeys "Mj <ret>" "tests/data/null_col.csv"
+  let hdr := header output
+  assert (contains hdr "|") s!"Should have key col separator after meta enter: {hdr}"
+
 def test_aggregate_requires_key : IO Unit := do
   let output ← runKeys "b" "tests/data/basic.csv"
   let (_, status) := footer output
@@ -349,6 +369,9 @@ def main : IO Unit := do
   test_decimal_decrease
   test_swap_views
   test_meta_select_rows_xkey_parent
+  test_meta_0_select_null_cols
+  test_meta_1_select_single_val_cols
+  test_meta_enter_sets_keycols
   test_aggregate_requires_key
   test_aggregate_multi_col
   test_multi_column_freq_enter

@@ -39,7 +39,8 @@ def chColon : UInt32 := 58   -- ':' command mode
 def chLL : UInt32 := 76      -- 'L' load file
 def chR : UInt32 := 114      -- 'r' list directory
 def chSpace : UInt32 := 32   -- Space toggle selection
-def ch0 : UInt32 := 48       -- '0' first column
+def ch0 : UInt32 := 48       -- '0' first column / meta: select null cols
+def ch1 : UInt32 := 49       -- '1' meta: select single-value cols
 def chDollar : UInt32 := 36  -- '$' last column
 def chCaret : UInt32 := 94   -- '^' rename column
 def chDot : UInt32 := 46     -- '.' increase decimals
@@ -87,10 +88,37 @@ def g (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.
 -- | G - go to end
 def G (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.goEnd c.nr })
 
--- | 0 - first column
+-- | 0 - first column (meta: select rows with null%)
 def zero (c : KeyCtx) : KeyResult := do
-  let first := Render.displayOrder c.v.keyCols c.nc |>.headD 0
-  pure (c.s.setCur { c.v with colVP := ⟨first, 0⟩ })
+  match c.v.vkind with
+  | .colMeta =>
+    match c.v.cache with
+    | some tbl =>
+      -- select rows where null% (col 4) is not "0%"
+      let sel := (List.range tbl.nRows).filter fun r =>
+        match tbl.get r 4 with
+        | .str s => s != "0%"
+        | _ => false
+      pure (c.s.setCur { c.v with selCols := sel })
+    | none => pure c.s
+  | _ =>
+    let first := Render.displayOrder c.v.keyCols c.nc |>.headD 0
+    pure (c.s.setCur { c.v with colVP := ⟨first, 0⟩ })
+
+-- | 1 - meta: select rows with dist == 1 (single-value cols)
+def one (c : KeyCtx) : KeyResult := do
+  match c.v.vkind with
+  | .colMeta =>
+    match c.v.cache with
+    | some tbl =>
+      -- select rows where dist (col 3) == 1
+      let sel := (List.range tbl.nRows).filter fun r =>
+        match tbl.get r 3 with
+        | .int n => n == 1
+        | _ => false
+      pure (c.s.setCur { c.v with selCols := sel })
+    | none => pure c.s
+  | _ => pure c.s  -- no-op for non-meta views
 
 -- | $ - last column
 def dollar (c : KeyCtx) : KeyResult := do
@@ -245,12 +273,36 @@ def retFld (c : KeyCtx) : KeyResult := do
 -- | ret on tbl: no-op (could add row details later)
 def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
 
+-- | ret on lr (source:lr): open file with bat (lr only lists files, not dirs)
+def retLr (c : KeyCtx) : KeyResult := do
+  match ← Backend.queryRow c.v.prql c.v.path c.v.rowVP.cursor 7 with
+  | .error _ => pure c.s
+  | .ok vals =>
+    let path := match vals.getD 6 .null with | .str s => s | _ => ""
+    if path.isEmpty then pure c.s
+    else
+      runBat path
+      pure c.s
+
+-- | ret on colMeta: pop to parent with selected rows as keyCols
+-- Note: row i in meta = column i in parent (meta rows are parent columns)
+def retMeta (c : KeyCtx) : KeyResult := do
+  if c.v.selCols.isEmpty then pure c.s
+  else match c.s.views.tail? with
+  | some (parent :: rest) =>
+    let newParent := { parent with keyCols := c.v.selCols }
+    pure { c.s with views := newParent :: rest }
+  | _ => pure c.s
+
 -- | ret - enter key (dispatch by ViewKind)
 def ret (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
   | .freqV colNames => retFreq c colNames
-  | .tbl => if c.v.path.startsWith "source:ls" then retFld c else retTbl c c.s
-  | .colMeta => pure c.s  -- TODO: could set key cols from selected
+  | .tbl =>
+    if c.v.path.startsWith "source:ls" then retFld c
+    else if c.v.path.startsWith "source:lr" then retLr c
+    else retTbl c c.s
+  | .colMeta => retMeta c
   | .fld => retFld c
 
 -- | T - duplicate view

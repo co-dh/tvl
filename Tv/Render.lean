@@ -168,8 +168,8 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
   let nonKeyPos := vr.cols.map fun (i, x, w) => (nonKeyCols.getD i 0, startX + x, w)
   -- combine: key cols + non-key cols
   let cols := keyPos ++ nonKeyPos
-  -- row range
-  let visRows := screenH - 2
+  -- row range (screenH-1: 1 for header at top)
+  let visRows := screenH - 1
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
   let endRow := min t.nRows (startRow + visRows)
   -- render header

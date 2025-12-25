@@ -86,6 +86,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
   else if ev.key == Term.keyHome || ev.ch == chG then Key.g c
   else if ev.key == Term.keyEnd || ev.ch == chGG then Key.G c
   else if ev.ch == ch0 then Key.zero c
+  else if ev.ch == ch1 then Key.one c
   else if ev.ch == chDollar then Key.dollar c
   else if ev.ch == chLBrack then Key.lbrak c
   else if ev.ch == chRBrack then Key.rbrak c

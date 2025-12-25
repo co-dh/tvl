@@ -249,21 +249,54 @@ def quoteCol (s : String) : String :=
   if s.any (fun c => !c.isAlphanum && c != '_') then s!"`{s}`"
   else s
 
+-- | Map Arrow format char to type name
+def fmtToType : Char → String
+  | 'l' => "int64" | 'i' => "int32" | 's' => "int16" | 'c' => "int8"
+  | 'L' => "uint64" | 'I' => "uint32" | 'S' => "uint16" | 'C' => "uint8"
+  | 'g' => "float64" | 'f' => "float32" | 'd' => "decimal"
+  | 'u' | 'U' => "str" | 'b' => "bool"
+  | 'w' => "date" | 'D' => "timestamp" | 't' => "time"
+  | _ => "?"
+
 -- | Query column metadata (stats for all columns)
 def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
-  -- First get column names from schema
+  -- First get column names and types from schema
   let schemaPrql := prql ++ " | take 1"
   match ← query (mkLimited schemaPrql 1) path with
   | .error e => return .error e
   | .ok schema =>
     let colNames := schema.cols.map (·.name)
     if colNames.isEmpty then return .ok Table.empty
+    -- Get types from schema query result
+    let typesPrql := prql ++ " | take 0"  -- just schema
+    if isSource path then createSource path
+    match ← compilePrql typesPrql with
+    | .error _ => pure ()
+    | .ok sql =>
+      let sql := replaceDf sql (fileExpr path)
+      let _ ← Adbc.query sql  -- run to get schema
+    -- Now query for types by getting format of each col
+    let typeSchemaPrql := prql ++ " | take 1"
+    let mut types : Array String := #[]
+    match ← compilePrql typeSchemaPrql with
+    | .error _ => types := (List.replicate colNames.size "?").toArray
+    | .ok sql =>
+      let sql := replaceDf sql (fileExpr path)
+      try
+        let qr ← Adbc.query sql
+        let nc ← Adbc.ncols qr
+        for c in [:nc.toNat] do
+          let fmt ← Adbc.colFmt qr c.toUInt64
+          types := types.push (fmtToType (fmtChar fmt))
+      catch _ => types := (List.replicate colNames.size "?").toArray
     -- Query stats for each column using type-safe Prql
     let mut rows : Array (Array Cell) := #[]
-    for colName in colNames do
+    for i in [:colNames.size] do
+      let colName := colNames.getD i ""
+      let colType := types.getD i "?"
       let metaPrql := (Prql.Query.parse prql).colMeta colName |>.render
       match ← query (mkLimited metaPrql 1) path with
-      | .error _ => rows := rows.push #[.str colName, .null, .null, .str "?", .null, .null]
+      | .error _ => rows := rows.push #[.str colName, .str colType, .null, .null, .str "?", .null, .null]
       | .ok tbl =>
         if tbl.nRows > 0 then
           let cnt := tbl.get 0 0
@@ -274,10 +307,10 @@ def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
           let nullPct := match cnt, total with
             | .int c, .int t => if t > 0 then s!"{(t - c) * 100 / t}%" else "0%"
             | _, _ => "?"
-          rows := rows.push #[.str colName, cnt, dist, .str nullPct, minV, maxV]
+          rows := rows.push #[.str colName, .str colType, cnt, dist, .str nullPct, minV, maxV]
         else
-          rows := rows.push #[.str colName, .null, .null, .str "?", .null, .null]
-    let metaCols := #[⟨"column"⟩, ⟨"cnt"⟩, ⟨"dist"⟩, ⟨"null%"⟩, ⟨"min"⟩, ⟨"max"⟩]
+          rows := rows.push #[.str colName, .str colType, .null, .null, .str "?", .null, .null]
+    let metaCols := #[⟨"column"⟩, ⟨"type"⟩, ⟨"cnt"⟩, ⟨"dist"⟩, ⟨"null%"⟩, ⟨"min"⟩, ⟨"max"⟩]
     return .ok (Table.create metaCols rows)
 
 end Backend
