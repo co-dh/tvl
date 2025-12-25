@@ -315,9 +315,9 @@ def L (c : KeyCtx) : KeyResult := do
     pure (c.s.push lv)
   | none => pure c.s
 
--- | r - list directory
+-- | r - recursive file listing
 def r (c : KeyCtx) : KeyResult := do
-  let rv : View := ⟨"source:ls", "from df", "ls ./", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+  let rv : View := ⟨"source:lr:.", "from df", "lr ./", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
   pure (c.s.push rv)
 
 -- | q - quit/pop

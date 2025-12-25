@@ -99,13 +99,13 @@ namespace Table
 def nCols (t : Table) : Nat := t.cols.size
 def nRows (t : Table) : Nat := t.rows.size
 
--- | Compute column widths (max of header and data, capped at 20)
+-- | Compute column widths (max of header and data, capped at 50)
 def calcWidths (cols : Array Column) (rows : Array (Array Cell)) : Array Nat :=
   let hdrW := cols.map (·.name.length)
   let dataW := rows.foldl (init := hdrW) fun acc row =>
     let rowW := row.map (Cell.toString ·) |>.map String.length
     Array.zipWith (fun a b => max a b) acc rowW
-  dataW.map (fun w => min 20 w)
+  dataW.map (fun w => min 50 w)
 
 -- | Create table with cached widths
 def create (cols : Array Column) (rows : Array (Array Cell)) : Table :=

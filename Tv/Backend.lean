@@ -52,12 +52,12 @@ def isSource (path : String) : Bool := path.startsWith "source:"
 def createSource (path : String) : IO Unit := do
   let src := path.drop 7  -- remove "source:"
   let (cmd, args, cols) := match src with
-    | "ls" => ("ls", #["-la"], "permissions,links,owner,grp,size,mon,day,time,name")
+    | "ls" => ("ls", #["-la", "--time-style=+%Y-%m-%d_%H:%M"], "permissions,links,owner,grp,size,datetime,name")
     | "ps" => ("ps", #["aux"], "user,pid,cpu,mem,vsz,rss,tty,stat,start,time,command")
     | "env" => ("env", #[], "name,value")
     | "df" => ("df", #["-h"], "filesystem,size,used,avail,pct,mount")
-    | s => if s.startsWith "ls:" then ("ls", #["-la", s.drop 3], "permissions,links,owner,grp,size,mon,day,time,name")
-           else if s.startsWith "lr:" then ("find", #[s.drop 3, "-type", "f"], "path")
+    | s => if s.startsWith "ls:" then ("ls", #["-la", "--time-style=+%Y-%m-%d_%H:%M", s.drop 3], "permissions,links,owner,grp,size,datetime,name")
+           else if s.startsWith "lr:" then ("find", #[s.drop 3, "-type", "f", "-printf", "%M\t%n\t%u\t%g\t%s\t%TY-%Tm-%Td_%TH:%TM\t%p\n"], "permissions,links,owner,grp,size,datetime,path")
            else ("echo", #["unknown source"], "line")
   let out ← IO.Process.output { cmd := cmd, args := args }
   let hasHeader := cmd == "ls" || cmd == "ps" || cmd == "df"
@@ -67,7 +67,9 @@ def createSource (path : String) : IO Unit := do
   let colList := cols.splitOn ","
   let mut vals : List String := []
   for line in lines do
-    let parts := line.splitOn " " |>.filter (!·.isEmpty)
+    -- try tab first (find -printf), fall back to space (ls, ps, df)
+    let parts := let ts := line.splitOn "\t"
+                 if ts.length > 1 then ts else line.splitOn " " |>.filter (!·.isEmpty)
     let escaped := parts.map (fun s => "'" ++ s.replace "'" "''" ++ "'")
     -- Pad or truncate to match column count
     let padded := escaped ++ List.replicate (colList.length - escaped.length) "''"
@@ -135,15 +137,28 @@ def execSql (sql : String) : IO Table := do
   let qr ← Adbc.query sql
   qrToTable qr
 
+-- | Get timestamp as HH:MM:SS.mmm
+def timestamp : IO String := do
+  let ms ← IO.monoMsNow
+  let s := ms / 1000 % 86400  -- seconds in day
+  let h := s / 3600
+  let m := (s % 3600) / 60
+  let sec := s % 60
+  let milli := ms % 1000
+  let d2 := fun n : Nat => String.ofList [Char.ofNat (48 + n / 10), Char.ofNat (48 + n % 10)]
+  pure s!"{h}:{d2 m}:{d2 sec}.{milli}"
+
 -- | Log to /tmp/tv.log
 def logPrql (prql : String) : IO Unit := do
+  let ts ← timestamp
   let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
-  h.putStrLn s!"[prql] {prql}"
+  h.putStrLn s!"[{ts}] [prql] {prql}"
 
 -- | Log error to file (not stderr - silent is golden)
 def logError (msg : String) : IO Unit := do
+  let ts ← timestamp
   let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
-  h.putStrLn s!"[error] {msg}"
+  h.putStrLn s!"[{ts}] [error] {msg}"
 
 -- | INVARIANT: No IO.e* writes in Tv/*.lean
 -- | All errors go to /tmp/tv.log for silent operation
