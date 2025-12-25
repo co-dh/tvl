@@ -80,6 +80,30 @@ def eq : Cell → Cell → Bool
 instance : BEq Cell where beq := eq
 instance : ToString Cell where toString := toString
 
+-- | Compare floats
+def cmpFloat (a b : Float) : Ordering :=
+  if a < b then .lt else if a > b then .gt else .eq
+
+-- | Compare cells (for sorting): null < bool < int/float < str
+def compare : Cell → Cell → Ordering
+  | .null, .null => .eq
+  | .null, _ => .lt
+  | _, .null => .gt
+  | .bool a, .bool b => if a == b then .eq else if a then .gt else .lt
+  | .bool _, _ => .lt
+  | _, .bool _ => .gt
+  | .int a, .int b => Ord.compare a b
+  | .int a, .float b => cmpFloat (Float.ofInt a) b
+  | .float a, .int b => cmpFloat a (Float.ofInt b)
+  | .float a, .float b => cmpFloat a b
+  | .int _, .str _ => .lt
+  | .float _, .str _ => .lt
+  | .str _, .int _ => .gt
+  | .str _, .float _ => .gt
+  | .str a, .str b => Ord.compare a b
+
+instance : Ord Cell where compare := compare
+
 end Cell
 
 -- | Column metadata
@@ -132,6 +156,15 @@ def colWidths (t : Table) : Array Nat := t.widths
 def filter (t : Table) (c : Nat) (v : Cell) : Table :=
   let newRows := t.rows.filter fun row => row.getD c .null == v
   create t.cols newRows
+
+-- | Sort table by column index (asc = true for ascending)
+def sortBy (t : Table) (col : Nat) (asc : Bool) : Table :=
+  let cmp := fun r1 r2 : Array Cell =>
+    let c1 := r1.getD col .null
+    let c2 := r2.getD col .null
+    if asc then Cell.compare c1 c2 else Cell.compare c2 c1
+  let sorted := t.rows.toList.mergeSort (fun a b => cmp a b == .lt) |>.toArray
+  { t with rows := sorted }
 
 -- | Build bar string with # chars
 def mkBar (pct : Nat) (maxW : Nat := 20) : String :=

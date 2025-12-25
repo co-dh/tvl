@@ -97,19 +97,29 @@ def dollar (c : KeyCtx) : KeyResult := do
   let last := Render.displayOrder c.v.keyCols c.nc |>.getLast? |>.getD 0
   pure (c.s.setCur { c.v with colVP := ⟨last, c.v.colVP.offset⟩ })
 
--- | [ - sort ascending (no-op for meta view)
+-- | [ - sort ascending
 def lbrak (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
-  | .colMeta => pure c.s  -- meta view can't be sorted via PRQL
+  | .colMeta =>  -- sort cached table in-memory
+    match c.v.cache with
+    | some tbl =>
+      let sorted := tbl.sortBy c.v.colVP.cursor true
+      pure (c.s.setCur { c.v with cache := some sorted })
+    | none => pure c.s
   | _ =>
     let col := c.di.colNames.getD c.v.colVP.cursor "?"
     let prql := (Prql.Query.parse c.v.prql).sortAsc col |>.render
     pure (c.s.setCur (c.v.copy (prql := prql)))
 
--- | ] - sort descending (no-op for meta view)
+-- | ] - sort descending
 def rbrak (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
-  | .colMeta => pure c.s  -- meta view can't be sorted via PRQL
+  | .colMeta =>  -- sort cached table in-memory
+    match c.v.cache with
+    | some tbl =>
+      let sorted := tbl.sortBy c.v.colVP.cursor false
+      pure (c.s.setCur { c.v with cache := some sorted })
+    | none => pure c.s
   | _ =>
     let col := c.di.colNames.getD c.v.colVP.cursor "?"
     let prql := (Prql.Query.parse c.v.prql).sortDesc col |>.render
