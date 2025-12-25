@@ -36,13 +36,17 @@ def reserved : List String :=
   ["count", "sum", "avg", "min", "max", "average", "group", "sort",
    "filter", "select", "derive", "from", "take", "date", "time"]
 
--- | Quote column name (add this. prefix for reserved words)
+-- | Quote column name (backticks for special chars, this. for reserved)
 def quote (s : String) : String :=
-  if reserved.contains s then s!"this.{s}" else s
+  let needsBacktick := s.any fun c => !c.isAlphanum && c != '_'
+  if needsBacktick then s!"`{s}`"
+  else if reserved.contains s then s!"this.{s}"
+  else s
 
--- | Render sort direction
+-- | Render sort direction (quotes col if needed)
 def Dir.render (d : Dir) (col : String) : String :=
-  match d with | .asc => col | .desc => s!"-{col}"
+  let qc := quote col
+  match d with | .asc => qc | .desc => s!"-{qc}"
 
 -- | Render aggregate function name
 def Agg.name : Agg → String
