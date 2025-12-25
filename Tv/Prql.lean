@@ -22,6 +22,7 @@ inductive Op where
   | group (keys : List String) (aggs : List (Agg × String × String))  -- group {k} (agg {name = fn col})
   | freq (col : String)                            -- freq col (builtin)
   | take (n : Nat)                                 -- take n
+  | colMeta (col : String)                         -- aggregate {cnt, dist, total, min, max}
   deriving Inhabited
 
 -- | PRQL query: base table + list of operations
@@ -64,6 +65,9 @@ def Op.render : Op → String
     s!"group \{{ks}} (aggregate \{{String.intercalate ", " as}})"
   | .freq col => s!"freq {col}"
   | .take n => s!"take {n}"
+  | .colMeta col =>
+    let qc := quote col
+    "aggregate {cnt = s\"COUNT(" ++ col ++ ")\", dist = count_distinct " ++ qc ++ ", total = count this, min = min " ++ qc ++ ", max = max " ++ qc ++ "}"
 
 -- | Render full query to PRQL string
 def Query.render (q : Query) : String :=
@@ -105,5 +109,8 @@ def Query.freqFull (q : Query) (cols : List String) : Query :=
 def Query.agg (q : Query) (keys : List String) (funcs : List Agg) (cols : List String) : Query :=
   let aggs := funcs.flatMap fun f => cols.map fun c => (f, s!"{f.name}_{c}", c)
   q.pipe (.group keys aggs)
+
+-- | Column metadata query (cnt, distinct, total, min, max)
+def Query.colMeta (q : Query) (col : String) : Query := q.pipe (.colMeta col)
 
 end Prql

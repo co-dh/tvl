@@ -4,6 +4,7 @@
 -/
 import Tv.Adbc
 import Tv.Types
+import Tv.Prql
 
 namespace Backend
 
@@ -257,11 +258,10 @@ def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
   | .ok schema =>
     let colNames := schema.cols.map (·.name)
     if colNames.isEmpty then return .ok Table.empty
-    -- Query stats for each column
+    -- Query stats for each column using type-safe Prql
     let mut rows : Array (Array Cell) := #[]
     for colName in colNames do
-      let qc := quoteCol colName
-      let metaPrql := s!"{prql} | colmeta this.{qc} df"
+      let metaPrql := (Prql.Query.parse prql).colMeta colName |>.render
       match ← query (mkLimited metaPrql 1) path with
       | .error _ => rows := rows.push #[.str colName, .null, .null, .str "?", .null, .null]
       | .ok tbl =>
