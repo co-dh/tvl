@@ -69,9 +69,7 @@ def Op.render : Op → String
     s!"group \{{ks}} (aggregate \{{String.intercalate ", " as}})"
   | .freq col => s!"freq {col}"
   | .take n => s!"take {n}"
-  | .colMeta col =>
-    let qc := quote col
-    "aggregate {cnt = s\"COUNT(" ++ col ++ ")\", dist = count_distinct " ++ qc ++ ", total = count this, min = min " ++ qc ++ ", max = max " ++ qc ++ "}"
+  | .colMeta col => s!"meta {quote col}"  -- uses meta function from prqlFuncs
 
 -- | Render full query to PRQL string
 def Query.render (q : Query) : String :=
