@@ -264,14 +264,14 @@ def test_meta_0_select_null_cols : IO Unit := do
   -- M0 should select row 1 (b column)
   let output ← runKeys "M0" "tests/data/null_col.csv"
   let (_, status) := footer output
-  assert (contains status "sel=1") s!"Should select 1 column with nulls: {status}"
+  assert (contains status "rows=1") s!"Should select 1 row with nulls: {status}"
 
 def test_meta_1_select_single_val_cols : IO Unit := do
   -- single_val.csv has a,b where b has only 'x' (dist=1)
   -- M1 should select row 1 (b column)
   let output ← runKeys "M1" "tests/data/single_val.csv"
   let (_, status) := footer output
-  assert (contains status "sel=1") s!"Should select 1 column with single value: {status}"
+  assert (contains status "rows=1") s!"Should select 1 row with single value: {status}"
 
 def test_meta_enter_sets_keycols : IO Unit := do
   -- Select b column in meta (row 1), press enter, should see key col in parent

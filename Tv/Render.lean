@@ -21,16 +21,18 @@ def header (t : Table) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
                     else (Term.cyan ||| Term.underline, Term.default)
     Term.printPad x.toUInt32 y w.toUInt32 fg bg col.name
 
--- | Render single data row with decimal precision (highlights selected columns)
+-- | Render single data row with decimal precision (highlights selected cols/rows)
 def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
-        (y : UInt32) (selCols : List Nat := []) : IO Unit := do
+        (y : UInt32) (selCols : List Nat := []) (selRows : List Nat := []) : IO Unit := do
   let cells := t.rows.getD rowIdx #[]
   let isCurRow := rowIdx == curRow
+  let isSelRow := selRows.contains rowIdx
   for (i, x, w) in cols do
     let cell := cells.getD i .null
     let isCursor := isCurRow && i == curCol
     let isSel := selCols.contains i
     let (fg, bg) := if isCursor then (Term.black, Term.white)
+                    else if isSelRow then (Term.black, Term.green)  -- selected row
                     else if isSel && isCurRow then (Term.black, Term.magenta)
                     else if isSel then (Term.magenta, Term.default)
                     else if isCurRow then (Term.default, Term.default)
@@ -141,7 +143,7 @@ theorem prevInDisplay_toKey :
 -- | Render table with viewport and key columns, returns (offset, cols, keyW)
 def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
           (keyCols : List Nat := []) (decimals : Nat := 3)
-          (selCols : List Nat := []) : IO (Nat × Array ColPos × Nat) := do
+          (selCols : List Nat := []) (selRows : List Nat := []) : IO (Nat × Array ColPos × Nat) := do
   Term.clear
   let widths := t.colWidths
   let curRow := rowVP.cursor
@@ -180,7 +182,7 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
   -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
-    row t cols ri curRow curCol decimals (i + 1).toUInt32 selCols
+    row t cols ri curRow curCol decimals (i + 1).toUInt32 selCols selRows
     -- render separator for each row
     if !keyCols.isEmpty then
       Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.default Term.default "|"
@@ -250,14 +252,15 @@ def tabLine (views : List (String × String × String)) (y : UInt32) (screenW : 
   Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (String.intercalate " | " marked)
 
 -- | Render status bar at bottom
-def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
+def statusBar (curRow total screenW : Nat) (keyCols selCols selRows : List Nat)
               (colNames : Array String) (y : UInt32) (msg : String := "") : IO Unit := do
-  -- left side: message or key/sel columns
+  -- left side: message or key/sel columns/rows
   let left := if msg.isEmpty then
     let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.length} "
     let selStr := if selCols.isEmpty then ""
       else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun i => colNames.getD i "?")
-    s!"{keyStr}{selStr}"
+    let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.length}"
+    s!"{keyStr}{selStr}{rowStr}"
   else msg
   -- right side: mem + row/total
   let mb ← memMB

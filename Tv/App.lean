@@ -52,11 +52,11 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       if cmd.startsWith "freq " then
         let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim
         let prql := (Prql.Query.parse v.prql).freqFull cols |>.render
-        let fv : View := ⟨v.path, prql, s!"freq {String.intercalate "," cols}", Viewport.create, Viewport.create, .freqV (String.intercalate "," cols), none, List.range cols.length, [], none, 3⟩
+        let fv : View := ⟨v.path, prql, s!"freq {String.intercalate "," cols}", Viewport.create, Viewport.create, .freqV (String.intercalate "," cols), none, List.range cols.length, [], [], none, 3⟩
         return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
-        let lrv : View := ⟨s!"source:lr:{dir}", "from df", s!"lr {dir}", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+        let lrv : View := ⟨s!"source:lr:{dir}", "from df", s!"lr {dir}", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
         return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
@@ -127,14 +127,14 @@ partial def loop (s : State) : IO Unit := do
   let w ← Term.width
   let h ← Term.height
   -- render table and overlays (h-3 for data, h-3 for header, h-2 for tab, h-1 for status)
-  let (off, cols, keyW) ← Render.table tbl v'.rowVP v'.colVP (h.toNat - 3) w.toNat v'.keyCols v'.decimals v'.selCols
+  let (off, cols, keyW) ← Render.table tbl v'.rowVP v'.colVP (h.toNat - 3) w.toNat v'.keyCols v'.decimals v'.selCols v'.selRows
   -- draw header again above tab line
   Render.header tbl cols v'.colVP.cursor (h - 3) v'.selCols
   if !v'.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.default Term.default "|"
   let views := s.views.map fun v => (v.path, v.disp, v.prql)
   Render.tabLine views (h - 2) w.toNat
   Render.statusBar v'.rowVP.cursor (v'.total.getD di.nRows) w.toNat
-                   v'.keyCols v'.selCols di.colNames (h - 1) s.msg
+                   v'.keyCols v'.selCols v'.selRows di.colNames (h - 1) s.msg
   if s.showInfo then Render.infoOverlay tbl v'.colVP.cursor v'.rowVP.cursor h.toNat w.toNat
   Term.present
   let newColOffset := off
@@ -169,7 +169,7 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
   if r < 0 then
     Backend.logError "Failed to init terminal"
     return
-  let v : View := ⟨path, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+  let v : View := ⟨path, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
   let s : State := { views := [v], keys := keys.toList, testMode := testMode }
   loop s
   Backend.shutdown

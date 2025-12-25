@@ -99,7 +99,7 @@ def zero (c : KeyCtx) : KeyResult := do
         match tbl.get r 4 with
         | .str s => s != "0%"
         | _ => false
-      pure (c.s.setCur { c.v with selCols := sel })
+      pure (c.s.setCur { c.v with selRows := sel })
     | none => pure c.s
   | _ =>
     let first := Render.displayOrder c.v.keyCols c.nc |>.headD 0
@@ -116,7 +116,7 @@ def one (c : KeyCtx) : KeyResult := do
         match tbl.get r 3 with
         | .int n => n == 1
         | _ => false
-      pure (c.s.setCur { c.v with selCols := sel })
+      pure (c.s.setCur { c.v with selRows := sel })
     | none => pure c.s
   | _ => pure c.s  -- no-op for non-meta views
 
@@ -200,7 +200,7 @@ def backslash (c : KeyCtx) : KeyResult := do
       if expr.isEmpty then pure c.s
       else
         let prql := (Prql.Query.parse c.v.prql).filter expr |>.render
-        let fv : View := ⟨c.v.path, prql, s!"filter {expr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
+        let fv : View := ⟨c.v.path, prql, s!"filter {expr}", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, c.v.decimals⟩
         pure (c.s.push fv)
     | none => pure c.s
   | .error _ => pure c.s
@@ -221,7 +221,7 @@ def s (c : KeyCtx) : KeyResult := do
 def M (c : KeyCtx) : KeyResult := do
   match ← Backend.queryMeta c.v.prql c.v.path with
   | .ok metaTbl =>
-    let mv : View := ⟨c.v.path, c.v.prql, "meta", Viewport.create, Viewport.create, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
+    let mv : View := ⟨c.v.path, c.v.prql, "meta", Viewport.create, Viewport.create, .colMeta, some metaTbl, [], [], [], some metaTbl.nRows, 3⟩
     pure (c.s.push mv)
   | .error e => pure (c.s.setMsg s!"meta error: {e}")
 
@@ -235,7 +235,7 @@ def F (c : KeyCtx) : KeyResult := do
   let colStr := String.intercalate "," cols
   let q := Prql.Query.parse c.v.prql
   let prql := if cols.length == 1 then q.freq cols.head! |>.render else q.freqFull cols |>.render
-  let fv : View := ⟨c.v.path, prql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, List.range cols.length, [], none, 3⟩
+  let fv : View := ⟨c.v.path, prql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, List.range cols.length, [], [], none, 3⟩
   pure (c.s.push fv)
 
 -- | ret on freqV: push filtered view based on selected row
@@ -249,7 +249,7 @@ def retFreq (c : KeyCtx) (colNames : String) : KeyResult := do
     let expr := String.intercalate " && " filters
     let parentPrql := match c.s.views.tail? with | some (pv :: _) => pv.prql | _ => "from df"
     let prql := (Prql.Query.parse parentPrql).filter expr |>.render
-    let fv : View := ⟨c.v.path, prql, s!"filter {expr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
+    let fv : View := ⟨c.v.path, prql, s!"filter {expr}", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, c.v.decimals⟩
     pure (c.s.push fv)
 
 -- | ret on folder (source:ls): enter folder or open file with bat
@@ -264,7 +264,7 @@ def retFld (c : KeyCtx) : KeyResult := do
       let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
       let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
       if perms.startsWith "d" then
-        let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+        let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
         pure (c.s.push lsv)
       else
         runBat fullPath
@@ -287,10 +287,10 @@ def retLr (c : KeyCtx) : KeyResult := do
 -- | ret on colMeta: pop to parent with selected rows as keyCols
 -- Note: row i in meta = column i in parent (meta rows are parent columns)
 def retMeta (c : KeyCtx) : KeyResult := do
-  if c.v.selCols.isEmpty then pure c.s
+  if c.v.selRows.isEmpty then pure c.s
   else match c.s.views.tail? with
   | some (parent :: rest) =>
-    let newParent := { parent with keyCols := c.v.selCols }
+    let newParent := { parent with keyCols := c.v.selRows }
     pure { c.s with views := newParent :: rest }
   | _ => pure c.s
 
@@ -350,7 +350,7 @@ def b (c : KeyCtx) : KeyResult := do
       if funcs.isEmpty then pure c.s
       else
         let prql := (Prql.Query.parse c.v.prql).agg keyNames funcs aggNames |>.render
-        let av : View := ⟨c.v.path, prql, "agg", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+        let av : View := ⟨c.v.path, prql, "agg", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
         let s' := c.s.setCur { c.v with selCols := [] }
         pure (s'.push av)
 
@@ -360,7 +360,7 @@ def colon (c : KeyCtx) : KeyResult := do
   else
     match ← runFzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" with
     | some cmd =>
-      let sv : View := ⟨s!"source:{cmd}", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+      let sv : View := ⟨s!"source:{cmd}", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
       pure (c.s.push sv)
     | none => pure c.s
 
@@ -379,13 +379,13 @@ def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with decimals := if
 def L (c : KeyCtx) : KeyResult := do
   match ← runFzf ["--prompt=Load: "] "" with
   | some path =>
-    let lv : View := ⟨path, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+    let lv : View := ⟨path, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
     pure (c.s.push lv)
   | none => pure c.s
 
 -- | r - recursive file listing
 def r (c : KeyCtx) : KeyResult := do
-  let rv : View := ⟨"source:lr:.", "from df", "lr ./", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+  let rv : View := ⟨"source:lr:.", "from df", "lr ./", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
   pure (c.s.push rv)
 
 -- | q - quit/pop

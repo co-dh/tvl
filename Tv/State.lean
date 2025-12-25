@@ -26,6 +26,7 @@ structure View where
   cache  : Option Table := none  -- cached result
   keyCols : List Nat := []       -- key columns for aggregate/pivot
   selCols : List Nat := []       -- selected columns for aggregate
+  selRows : List Nat := []       -- selected rows (for meta view)
   total  : Option Nat := none    -- total row count (from cnt query)
   decimals : Nat := 3            -- decimal precision for floats
 
@@ -50,7 +51,7 @@ structure State where
   showInfo : Bool := false        -- show info overlay (toggle with I)
 
 -- | Default empty view
-def View.empty : View := ⟨"", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+def View.empty : View := ⟨"", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
 
 -- | Current view
 def State.cur (s : State) : View := s.views.headD View.empty
