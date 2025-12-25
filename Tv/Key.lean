@@ -7,6 +7,7 @@ import Tv.Render
 import Tv.Backend
 import Tv.State
 import Tv.Fzf
+import Tv.Prql
 
 namespace App
 
@@ -98,28 +99,28 @@ def dollar (c : KeyCtx) : KeyResult := do
 
 -- | [ - sort ascending
 def lbrak (c : KeyCtx) : KeyResult := do
-  let colName := c.di.colNames.getD c.v.colVP.cursor "?"
-  let prql := c.v.prql ++ " | sort {" ++ colName ++ "}"
+  let col := c.di.colNames.getD c.v.colVP.cursor "?"
+  let prql := (Prql.Query.parse c.v.prql).sortAsc col |>.render
   pure (c.s.setCur (c.v.copy (prql := prql)))
 
 -- | ] - sort descending
 def rbrak (c : KeyCtx) : KeyResult := do
-  let colName := c.di.colNames.getD c.v.colVP.cursor "?"
-  let prql := c.v.prql ++ " | sort {-" ++ colName ++ "}"
+  let col := c.di.colNames.getD c.v.colVP.cursor "?"
+  let prql := (Prql.Query.parse c.v.prql).sortDesc col |>.render
   pure (c.s.setCur (c.v.copy (prql := prql)))
 
 -- | D - delete column(s)
 def D (c : KeyCtx) : KeyResult := do
   let delCols := if c.v.selCols.isEmpty then [c.v.colVP.cursor] else c.v.selCols
   let delNames := delCols.map fun i => c.di.colNames.getD i "?"
-  let allCols := c.di.colNames.toList.filter (!delNames.contains ·) |>.map quoteName
-  if allCols.length > 0 then
-    let selPrql := c.v.prql ++ " | select {" ++ String.intercalate ", " allCols ++ "}"
+  let keepCols := c.di.colNames.toList.filter (!delNames.contains ·)
+  if keepCols.length > 0 then
+    let prql := (Prql.Query.parse c.v.prql).select keepCols |>.render
     let prevDel := if c.v.disp.startsWith "del " then c.v.disp.drop 4 else ""
     let delStr := String.intercalate "," delNames
     let newDisp := if prevDel.isEmpty then s!"del {delStr}" else s!"del {prevDel},{delStr}"
     let newColVP := if c.v.colVP.cursor ≥ c.nc - delCols.length then c.v.colVP.moveLeft else c.v.colVP
-    let v' := { c.v.copy (prql := selPrql) with disp := newDisp, colVP := newColVP, selCols := [] }
+    let v' := { c.v.copy (prql := prql) with disp := newDisp, colVP := newColVP, selCols := [] }
     pure (c.s.setCur v'.invalidate)
   else pure c.s
 
@@ -135,37 +136,27 @@ def atSign (c : KeyCtx) : KeyResult := do
 
 -- | \ - filter with fzf
 def backslash (c : KeyCtx) : KeyResult := do
-  let colName := c.di.colNames.getD c.v.colVP.cursor "?"
-  match ← Backend.queryDistinct c.v.prql c.v.path colName with
+  let col := c.di.colNames.getD c.v.colVP.cursor "?"
+  match ← Backend.queryDistinct c.v.prql c.v.path col with
   | .ok vals =>
-    -- prompt shows PRQL examples
-    let prompt := s!"PRQL: {colName} == 'x' | > 5 | ~= 'pat' > "
+    let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
     match ← runFzf ["--print-query", "--prompt=" ++ prompt] (String.intercalate "\n" vals) with
     | some result =>
-      -- with --print-query, first line is query, rest are selections
       let lines := result.splitOn "\n" |>.filter (!·.isEmpty)
       let query := lines.headD ""
-      let sels := lines.tailD []
-      -- check if selections are from hints
-      let fromHints := sels.filter vals.contains
-      let expr := if fromHints.length == 1 then
-        -- single hint → equality
-        let v := fromHints.head!
-        s!"{colName} == '{v}'"
-      else if fromHints.length > 1 then
-        -- multiple hints → OR chain
-        let clauses := fromHints.map fun v => s!"{colName} == '{v}'"
-        "(" ++ String.intercalate " || " clauses ++ ")"
-      else if !query.isEmpty then
-        -- raw PRQL expression (prepend colName if just operator)
-        if query.startsWith ">" || query.startsWith "<" || query.startsWith "=" || query.startsWith "~" then
-          s!"{colName} {query}"
-        else query
-      else ""
+      let fromHints := (lines.tailD []).filter vals.contains
+      -- build filter expression
+      let expr := if fromHints.length == 1 then s!"{col} == '{fromHints.head!}'"
+        else if fromHints.length > 1 then
+          "(" ++ String.intercalate " || " (fromHints.map fun v => s!"{col} == '{v}'") ++ ")"
+        else if !query.isEmpty then
+          if query.startsWith ">" || query.startsWith "<" || query.startsWith "=" || query.startsWith "~"
+          then s!"{col} {query}" else query
+        else ""
       if expr.isEmpty then pure c.s
       else
-        let filterPrql := c.v.prql ++ " | filter " ++ expr
-        let fv : View := ⟨c.v.path, filterPrql, s!"filter {expr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
+        let prql := (Prql.Query.parse c.v.prql).filter expr |>.render
+        let fv : View := ⟨c.v.path, prql, s!"filter {expr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
         pure (c.s.push fv)
     | none => pure c.s
   | .error _ => pure c.s
@@ -178,9 +169,8 @@ def s (c : KeyCtx) : KeyResult := do
     let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
     let selected ← runFzfMulti ["--prompt=Select: "] colNamesStr
     if selected.length > 0 then
-      let quoted := selected.map quoteName
-      let selPrql := c.v.prql ++ " | select {" ++ String.intercalate ", " quoted ++ "}"
-      pure (c.s.setCur (c.v.copy (prql := selPrql)))
+      let prql := (Prql.Query.parse c.v.prql).select selected |>.render
+      pure (c.s.setCur (c.v.copy (prql := prql)))
     else pure c.s
 
 -- | M - meta view (works on any view)
@@ -196,18 +186,12 @@ def I (c : KeyCtx) : KeyResult := pure { c.s with showInfo := !c.s.showInfo }
 
 -- | F - frequency view (works on any view)
 def F (c : KeyCtx) : KeyResult := do
-  let (cols, colStr) := if c.v.keyCols.isEmpty then
-    let name := c.di.colNames.getD c.v.colVP.cursor "?"
-    ([name], name)
-  else
-    let names := c.v.keyCols.map fun i => c.di.colNames.getD i "?"
-    (names, String.intercalate "," names)
-  let freqPrql := if cols.length == 1 then
-    c.v.prql ++ " | freq " ++ cols.head!
-  else
-    c.v.prql ++ " | group {" ++ colStr ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
-  let freqKeys := List.range cols.length
-  let fv : View := ⟨c.v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, freqKeys, [], none, 3⟩
+  let cols := if c.v.keyCols.isEmpty then [c.di.colNames.getD c.v.colVP.cursor "?"]
+              else c.v.keyCols.map fun i => c.di.colNames.getD i "?"
+  let colStr := String.intercalate "," cols
+  let q := Prql.Query.parse c.v.prql
+  let prql := if cols.length == 1 then q.freq cols.head! |>.render else q.freqFull cols |>.render
+  let fv : View := ⟨c.v.path, prql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, List.range cols.length, [], none, 3⟩
   pure (c.s.push fv)
 
 -- | ret on freqV: push filtered view based on selected row
@@ -217,14 +201,11 @@ def retFreq (c : KeyCtx) (colNames : String) : KeyResult := do
   | .error _ => pure c.s
   | .ok vals =>
     let filters := (List.range cols.length).zip cols |>.map fun (i, cn) =>
-      let val := vals.getD i .null
-      s!"{cn} == {cellToPrql val}"
-    let filterExpr := String.intercalate " && " filters
-    let parentPrql := match c.s.views.tail? with
-      | some (pv :: _) => pv.prql
-      | _ => "from df"
-    let filterPrql := s!"{parentPrql} | filter {filterExpr}"
-    let fv : View := ⟨c.v.path, filterPrql, s!"filter {filterExpr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
+      s!"{cn} == {cellToPrql (vals.getD i .null)}"
+    let expr := String.intercalate " && " filters
+    let parentPrql := match c.s.views.tail? with | some (pv :: _) => pv.prql | _ => "from df"
+    let prql := (Prql.Query.parse parentPrql).filter expr |>.render
+    let fv : View := ⟨c.v.path, prql, s!"filter {expr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
     pure (c.s.push fv)
 
 -- | ret on folder (source:ls): enter folder or open file with bat
@@ -277,6 +258,11 @@ def space (c : KeyCtx) : KeyResult := do
                 else c.v.selCols ++ [col]
   pure (c.s.setCur { c.v with selCols := newSel })
 
+-- | Parse agg function name to Prql.Agg
+def parseAgg : String → Option Prql.Agg
+  | "count" => some .count | "sum" => some .sum | "average" => some .avg
+  | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
+
 -- | b - aggregate by key columns
 def b (c : KeyCtx) : KeyResult := do
   if c.v.keyCols.isEmpty then pure { c.s with msg := "Set key columns first with !" }
@@ -285,29 +271,18 @@ def b (c : KeyCtx) : KeyResult := do
     let aggCols := if c.v.selCols.isEmpty then [c.v.colVP.cursor] else c.v.selCols
     let aggNames := aggCols.map fun i => c.di.colNames.getD i "?"
     if aggNames.isEmpty then pure { c.s with msg := "No columns to aggregate" }
-    else if c.s.testMode then
-      -- test mode: use sum as default
-      let funcs := ["sum"]
-      let aggExprs := funcs.flatMap fun f => aggNames.map fun n => s!"{f}_{n} = {f} {n}"
-      let aggPrql := c.v.prql ++ " | group {" ++ String.intercalate ", " keyNames ++
-                     "} (aggregate {" ++ String.intercalate ", " aggExprs ++ "})"
-      let av : View := ⟨c.v.path, aggPrql, "agg", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-      let s' := c.s.setCur { c.v with selCols := [] }
-      pure (s'.push av)
     else
-      -- fzf multi-select for agg functions
-      let keysStr := String.intercalate "," keyNames
-      let colsStr := String.intercalate "," aggNames
-      let prompt := "group {" ++ keysStr ++ "} (agg {? " ++ colsStr ++ "}) [Tab=multi]: "
-      let funcs ← runFzfMulti ["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev"
+      let funcs ← if c.s.testMode then pure [Prql.Agg.sum]
+        else do
+          let keysStr := String.intercalate "," keyNames
+          let colsStr := String.intercalate "," aggNames
+          let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
+          let names ← runFzfMulti ["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev"
+          pure (names.filterMap parseAgg)
       if funcs.isEmpty then pure c.s
       else
-        -- apply each func to each col: func_col = func col
-        let aggExprs := funcs.flatMap fun f => aggNames.map fun n => s!"{f}_{n} = {f} {n}"
-        let aggPrql := c.v.prql ++ " | group {" ++ String.intercalate ", " keyNames ++
-                       "} (aggregate {" ++ String.intercalate ", " aggExprs ++ "})"
-        let av : View := ⟨c.v.path, aggPrql, "agg", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-        -- clear selection in current view and push agg view
+        let prql := (Prql.Query.parse c.v.prql).agg keyNames funcs aggNames |>.render
+        let av : View := ⟨c.v.path, prql, "agg", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
         let s' := c.s.setCur { c.v with selCols := [] }
         pure (s'.push av)
 

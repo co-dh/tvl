@@ -8,6 +8,7 @@ import Tv.Render
 import Tv.Backend
 import Tv.State
 import Tv.Fzf
+import Tv.Prql
 import Tv.Key
 
 namespace App
@@ -19,9 +20,8 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let cols := s.inputBuf.splitOn "," |>.map String.trim |>.filter (!·.isEmpty)
       if cols.length > 0 then
-        let quoted := cols.map quoteName
-        let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " quoted ++ "}"
-        return some { s.setCur (v.copy (prql := selPrql)) with inputMode := .none, inputBuf := "" }
+        let prql := (Prql.Query.parse v.prql).select cols |>.render
+        return some { s.setCur (v.copy (prql := prql)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -30,10 +30,10 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       let newName := s.inputBuf.trim
       if !newName.isEmpty then
         let oldName := di.colNames.getD v.colVP.cursor "?"
-        let allCols := di.colNames.toList.map fun n => if n == oldName then quoteName newName else quoteName n
-        let renamePrql := v.prql ++ " | derive {" ++ quoteName newName ++ " = " ++ quoteName oldName ++
-                          "} | select {" ++ String.intercalate ", " allCols ++ "}"
-        return some { s.setCur (v.copy (prql := renamePrql)) with inputMode := .none, inputBuf := "" }
+        let newCols := di.colNames.toList.map fun n => if n == oldName then newName else n
+        let q := Prql.Query.parse v.prql
+        let prql := q.derive1 newName (Prql.quote oldName) |>.select newCols |>.render
+        return some { s.setCur (v.copy (prql := prql)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -41,8 +41,8 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let expr := s.inputBuf.trim
       if !expr.isEmpty then
-        let filterPrql := v.prql ++ " | filter " ++ expr
-        return some { s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
+        let prql := (Prql.Query.parse v.prql).filter expr |>.render
+        return some { s.setCur (v.copy (prql := prql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -50,10 +50,9 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let cmd := s.inputBuf.trim
       if cmd.startsWith "freq " then
-        let cols := cmd.drop 5 |>.trim
-        let colList := cols.splitOn "," |>.map String.trim
-        let freqPrql := v.prql ++ " | group {" ++ cols ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
-        let fv : View := ⟨v.path, freqPrql, s!"freq {cols}", Viewport.create, Viewport.create, .freqV cols, none, List.range colList.length, [], none, 3⟩
+        let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim
+        let prql := (Prql.Query.parse v.prql).freqFull cols |>.render
+        let fv : View := ⟨v.path, prql, s!"freq {String.intercalate "," cols}", Viewport.create, Viewport.create, .freqV (String.intercalate "," cols), none, List.range cols.length, [], none, 3⟩
         return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
@@ -61,8 +60,8 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
         return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
-        let filterPrql := v.prql ++ " | filter " ++ expr
-        return some { s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
+        let prql := (Prql.Query.parse v.prql).filter expr |>.render
+        return some { s.setCur (v.copy (prql := prql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "", msg := s!"unknown: {cmd}" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -131,8 +130,8 @@ partial def loop (s : State) : IO Unit := do
   -- draw header again above tab line
   Render.header tbl cols v'.colVP.cursor (h - 3) v'.selCols
   if !v'.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.white Term.black "|"
-  let disps := s.views.map fun v => (v.disp, v.prql)
-  Render.tabLine v'.path disps (h - 2)
+  let views := s.views.map fun v => (v.path, v.disp, v.prql)
+  Render.tabLine views (h - 2)
   Render.statusBar v'.rowVP.cursor (v'.total.getD di.nRows) w.toNat
                    v'.keyCols v'.selCols di.colNames (h - 1) s.msg
   if s.showInfo then Render.infoOverlay tbl v'.colVP.cursor v'.rowVP.cursor h.toNat w.toNat
