@@ -253,8 +253,8 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
       -- parse command (freq, lr, filter, etc.)
       if cmd.startsWith "freq " then
         let cols := cmd.drop 5 |>.trim
-        -- multi-column freq: group by all, count, sort
-        let freqPrql := v.prql ++ " | group {" ++ cols ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt} | sort {-Cnt}"
+        -- multi-column freq: group by all, count, pct, bar, sort
+        let freqPrql := v.prql ++ " | group {" ++ cols ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
         let fv : View := ⟨v.path, freqPrql, s!"freq {cols}", Viewport.create, Viewport.create, .freqV cols, none, [], [], none, 3⟩
         return { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
@@ -376,12 +376,20 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
     let row := v.rowVP.cursor
     let iv : View := ⟨v.path, v.prql, "", Viewport.create, Viewport.create, .info col row, v.cache, v.keyCols, v.selCols, v.total, v.decimals⟩
     return s.push iv
-  -- freq: push freq view with PRQL
+  -- freq: use key columns if set, else cursor column
   else if ev.ch == chF then
-    let col := v.colVP.cursor
-    let colName := di.colNames.getD col "?"
-    let freqPrql := v.prql ++ " | freq " ++ colName
-    let fv : View := ⟨v.path, freqPrql, s!"freq {colName}", Viewport.create, Viewport.create, .freqV colName, none, [], [], none, 3⟩
+    let (cols, colStr) := if v.keyCols.isEmpty then
+      let col := v.colVP.cursor
+      let name := di.colNames.getD col "?"
+      ([name], name)
+    else
+      let names := v.keyCols.map fun i => di.colNames.getD i "?"
+      (names, String.intercalate "," names)
+    let freqPrql := if cols.length == 1 then
+      v.prql ++ " | freq " ++ cols.head!
+    else
+      v.prql ++ " | group {" ++ colStr ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
+    let fv : View := ⟨v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, [], [], none, 3⟩
     return s.push fv
   -- enter: in freq view, filter parent by selected value (key=0x0D or ch=13)
   else if ev.key == Term.keyEnter || ev.ch == 13 then
