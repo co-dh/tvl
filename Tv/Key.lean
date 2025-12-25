@@ -91,20 +91,12 @@ inductive NavKey where
   | ctrlD | ctrlU        -- page down/up
   | retMeta (sel : List Nat)  -- return from meta with selected cols as keys
 
--- | Calculate available width for non-key columns
-def availWidth (keyCols : List Nat) (widths : Array Nat) (screenW : Nat) : Nat :=
-  let keyW := keyCols.foldl (fun acc i => acc + widths.getD i 10 + 1) 0
-  let sepW := if keyCols.isEmpty then 0 else 1
-  screenW - keyW - sepW
-
 -- | Adjust offset to keep cursor visible (scroll left or right)
 -- When scrolling right, set cursor as leftmost (offset = cursor)
 -- This guarantees cursor is visible if visCols > 0
--- Note: uses available width after key columns, not full screen width
-def adjustOffset (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx) : Nat :=
-  let restW := availWidth keyCols ctx.widths ctx.screenW
+def adjustOffset (colOff cursor nCols : Nat) (_keyCols : List Nat) (ctx : Render.ScreenCtx) : Nat :=
   if cursor < colOff then cursor  -- scroll left: cursor at left edge
-  else if cursor >= colOff + Render.visColCount ctx.widths nCols restW colOff
+  else if cursor >= colOff + Render.visColCount ctx.widths nCols ctx.screenW colOff
        then cursor  -- scroll right: cursor at left edge
   else colOff  -- already visible
 
@@ -119,9 +111,9 @@ theorem adjustOffset_left (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx 
 -- | Theorem: adjustOffset ensures cursor < offset + visCols (right bound)
 -- Requires at least 1 column visible at the new offset
 theorem adjustOffset_right (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx)
-    (hVis : Render.visColCount ctx.widths nCols (availWidth keyCols ctx.widths ctx.screenW) (adjustOffset colOff cursor nCols keyCols ctx) > 0) :
+    (hVis : Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) > 0) :
     cursor < adjustOffset colOff cursor nCols keyCols ctx +
-             Render.visColCount ctx.widths nCols (availWidth keyCols ctx.widths ctx.screenW) (adjustOffset colOff cursor nCols keyCols ctx) := by
+             Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) := by
   unfold adjustOffset at hVis ⊢
   split
   case isTrue h =>  -- cursor < colOff: offset = cursor
@@ -182,7 +174,6 @@ theorem KeyCtx.widths_size (c : KeyCtx) (h : c.cw.size = c.nc) :
     c.toScreenCtx.widths.size = c.toScreenCtx.nCols := by
   simp [toScreenCtx, h]
 
--- | Run pure nav and apply to state
 def runNav (c : KeyCtx) (key : NavKey) : State :=
   let ctx := c.toScreenCtx
   let p := c.v.toPure c.nr c.nc
@@ -469,9 +460,42 @@ theorem handleNav_rowVisible (s : PureState) (key : NavKey) (ctx : Render.Screen
   cases key <;> simp [handleNav] <;> exact Render.rowVisibleP_always _ _ (by omega)
 
 
+-- | Combined: adjustOffset ensures colVisible (with key columns)
+theorem adjustOffset_colVisible (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx)
+    (hNC : nCols = ctx.nCols)
+    (hVis : Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) > 0) :
+    Render.colVisible cursor (adjustOffset colOff cursor nCols keyCols ctx) ctx = true := by
+  subst hNC
+  simp only [Render.colVisible, Bool.and_eq_true, decide_eq_true_eq]
+  constructor
+  · exact adjustOffset_left colOff cursor ctx.nCols keyCols ctx
+  · exact adjustOffset_right colOff cursor ctx.nCols keyCols ctx hVis
+
 -- | All nav keys must keep cursor column visible
--- TODO: update proof to work with new adjustOffset that accounts for key columns
--- theorem handleNav_colVisible ...
+-- Requires visCols > 0 at the new offset for column-changing keys
+theorem handleNav_colVisible (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx)
+    (hNC : s.nCols = ctx.nCols)
+    (hVis : Render.colVisible s.colCur s.colOff ctx = true)
+    (hVisCols : ∀ off, Render.visColCount ctx.widths s.nCols ctx.screenW off > 0) :
+    let s' := handleNav s key ctx
+    Render.colVisible s'.colCur s'.colOff ctx = true := by
+  cases key <;> simp only [handleNav]
+  case j => exact hVis
+  case k => exact hVis
+  case g => exact hVis
+  case G => exact hVis
+  case ctrlD => exact hVis
+  case ctrlU => exact hVis
+  case l => exact adjustOffset_colVisible s.colOff _ s.nCols s.keyCols ctx hNC (hVisCols _)
+  case h => exact adjustOffset_colVisible s.colOff _ s.nCols s.keyCols ctx hNC (hVisCols _)
+  case dollar => exact adjustOffset_colVisible s.colOff _ s.nCols s.keyCols ctx hNC (hVisCols _)
+  case zero =>
+    simp only [Render.colVisible, Bool.and_eq_true, decide_eq_true_eq]
+    constructor
+    · omega
+    · have h := hVisCols 0; rw [← hNC]; omega
+  case retMeta sel =>
+    exact adjustOffset_colVisible s.colOff _ s.nCols sel ctx hNC (hVisCols _)
 
 -- | Pure: pop meta view and set parent's keyCols
 def popMetaPure (views : List View) (selRows : List Nat) : List View :=

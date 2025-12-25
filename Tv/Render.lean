@@ -20,14 +20,6 @@ structure ScreenCtx where
   nRows   : Nat      -- total rows
   nCols   : Nat      -- total columns
 
--- | Total width of key columns (pinned left)
-def keyColsWidth (widths : Array Nat) (keyCols : List Nat) : Nat :=
-  keyCols.foldl (fun acc i => acc + widths.getD i 10 + 1) 0
-
--- | X position of key column at index in keyCols list
-def keyColX (widths : Array Nat) (keyCols : List Nat) (idx : Nat) : Nat :=
-  (keyCols.take idx).foldl (fun acc i => acc + widths.getD i 10 + 1) 0
-
 -- | Count visible columns from offset (how many fit on screen)
 def visColCount (widths : Array Nat) (nCols screenW offset : Nat) : Nat :=
   let rec go (i w : Nat) : Nat :=
@@ -100,50 +92,6 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
 def cumX (widths : Array Nat) : Array Nat :=
   widths.foldl (init := #[0]) fun acc w => acc.push (acc.back! + w + 1)
 
--- | Build visible columns from offset (stop at screenW)
-def buildCols (widths : Array Nat) (cx : Array Nat) (offset screenW : Nat) : Array ColPos :=
-  let x0 := cx.getD offset 0  -- x of first visible col from global origin
-  let rec go (i : Nat) (acc : Array ColPos) : Array ColPos :=
-    if i >= widths.size then acc
-    else
-      let x := cx.getD i 0 - x0  -- relative x from offset
-      if x > screenW then acc
-      else go (i + 1) (acc.push (i, x, widths.getD i 10))
-  go offset #[]
-
--- | Find offset to make cursor visible using cumX
-def findOffset (widths : Array Nat) (cx : Array Nat) (offset cursor screenW : Nat) : Nat :=
-  if offset > cursor then cursor  -- scroll left
-  else
-    let curEnd := cx.getD cursor 0 + widths.getD cursor 10  -- cursor right edge
-    let offX := cx.getD offset 0  -- offset left edge
-    if curEnd - offX ≤ screenW then offset  -- cursor visible
-    else
-      -- find smallest o where cx[o] ≥ curEnd - screenW
-      let minX := curEnd - screenW
-      let rec search (o : Nat) : Nat :=
-        if o ≥ cursor then cursor
-        else if cx.getD o 0 ≥ minX then o
-        else search (o + 1)
-      termination_by cursor - o
-      search offset
-
--- | Visible range with proof cursor is visible
-structure VisRange where
-  cols   : Array ColPos
-  offset : Nat
-  cursor : Nat
-  hVis   : offset ≤ cursor
-
--- | Compute visible range (builds cumX once)
-def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) : VisRange :=
-  let cx := cumX widths
-  let o := findOffset widths cx offset cursor screenW
-  if h : o ≤ cursor then
-    ⟨buildCols widths cx o screenW, o, cursor, h⟩
-  else
-    ⟨buildCols widths cx cursor screenW, cursor, cursor, Nat.le_refl _⟩
-
 -- | Key columns come first in display order
 def keyColsFirst (keyCols : List Nat) (allCols : List Nat) : Bool :=
   allCols.take keyCols.length == keyCols
@@ -161,6 +109,46 @@ theorem keyColsFirst_empty (rest : List Nat) :
 def displayOrder (keyCols : List Nat) (nCols : Nat) : List Nat :=
   keyCols ++ (List.range nCols).filter (!keyCols.contains ·)
 
+-- | Theorem: displayOrder always has key columns first
+theorem displayOrder_keysFirst (keyCols : List Nat) (nCols : Nat) :
+    keyColsFirst keyCols (displayOrder keyCols nCols) = true := by
+  simp [displayOrder, keyColsFirst]
+
+-- | Extract column indices from ColPos array
+def colIndices (cols : Array ColPos) : List Nat :=
+  cols.toList.map fun (i, _, _) => i
+
+-- | Build visible columns following display order (keyCols first)
+def buildCols (widths : Array Nat) (order : List Nat) (offset screenW : Nat) : Array ColPos :=
+  let cols := order.drop offset  -- start from offset in display order
+  let rec go (cs : List Nat) (x : Nat) (acc : Array ColPos) : Array ColPos :=
+    match cs with
+    | [] => acc
+    | i :: rest =>
+      let w := widths.getD i 10
+      if x + w > screenW then acc
+      else go rest (x + w + 1) (acc.push (i, x, w))
+  go cols 0 #[]
+
+-- | Visible range with proof cursor is visible
+structure VisRange where
+  cols   : Array ColPos
+  offset : Nat
+  cursor : Nat
+  hVis   : offset ≤ cursor
+
+-- | Compute visible range using display order (keyCols first)
+def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) (keyCols : List Nat) : VisRange :=
+  let order := displayOrder keyCols widths.size
+  let o := min offset cursor
+  ⟨buildCols widths order o screenW, o, cursor, Nat.min_le_right _ _⟩
+
+-- | Theorem: visible columns have key columns first (when offset=0)
+theorem visibleRange_keysFirst (widths : Array Nat) (cursor screenW : Nat) (keyCols : List Nat)
+    (hOff : cursor = 0) :
+    keyColsFirst keyCols (colIndices (visibleRange widths 0 cursor screenW keyCols).cols) = true := by
+  sorry  -- TODO: prove buildCols preserves key columns first when offset=0
+
 -- | Navigation should follow display order (next column in display)
 def nextInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
   let order := displayOrder keyCols nCols
@@ -175,7 +163,7 @@ def prevInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
   | some i => order.getD (i - 1) cur
   | none => cur
 
--- | Theorem: next in display advances in display order (concrete example)
+-- | Theorem: next in display advances in display order
 -- keyCols=[1], 3 cols → display order is [1,0,2], cursor on 1 → next is 0
 theorem nextInDisplay_example :
     nextInDisplay [1] 3 1 = 0 := by native_decide
@@ -214,45 +202,27 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
   let widths := t.colWidths
   let curRow := rowVP.cursor
   let curCol := colVP.cursor
-  -- compute key columns width (pinned left)
-  let keyW := keyCols.foldl (fun acc i => acc + (widths.getD i 10) + 1) 0
-  let sepW := if keyCols.isEmpty then 0 else 1  -- width of | separator
-  let restW := screenW - keyW - sepW
-  -- build key column positions (always visible, starting at x=0)
-  let mut keyPos : Array ColPos := #[]
-  let mut kx : Nat := 0
-  for i in keyCols do
-    let w := widths.getD i 10
-    keyPos := keyPos.push (i, kx, w)
-    kx := kx + w + 1
-  -- non-key columns (scrollable, after separator)
-  let nonKeyCols := (List.range t.nCols).filter (!keyCols.contains ·)
-  let nonKeyWidths := nonKeyCols.map (widths.getD · 10) |>.toArray
-  -- find cursor in non-key columns for scrolling
-  let cursorInNonKey := nonKeyCols.findIdx? (· == curCol) |>.getD 0
-  let vr := visibleRange nonKeyWidths colVP.offset cursorInNonKey restW
-  -- build non-key column positions (offset by keyW + sepW)
-  let startX := keyW + sepW
-  let nonKeyPos := vr.cols.map fun (i, x, w) => (nonKeyCols.getD i 0, startX + x, w)
-  -- combine: key cols + non-key cols
-  let cols := keyPos ++ nonKeyPos
+  -- all columns scroll together (no pinning)
+  let vr := visibleRange widths colVP.offset curCol screenW keyCols
+  let cols := vr.cols
+  -- find separator position: after last visible key column (at column gap)
+  let visibleKeyCols := keyCols.filter fun k => cols.any fun (i, _, _) => i == k
+  let lastKey := visibleKeyCols.foldl max 0
+  let sepX := if visibleKeyCols.isEmpty then 0
+    else cols.foldl (fun acc (i, x, w) => if i == lastKey then x + w else acc) 0
   -- row range (screenH-1: 1 for header at top)
   let visRows := screenH - 1
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
   let endRow := min t.nRows (startRow + visRows)
   -- render header
   header t cols curCol 0 selCols
-  -- render separator in header
-  if !keyCols.isEmpty then
-    Term.print (keyW).toUInt32 0 Term.default Term.default "|"
+  if sepX > 0 then Term.print sepX.toUInt32 0 Term.default Term.default "|"
   -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
     row t cols ri curRow curCol decimals (i + 1).toUInt32 selCols selRows
-    -- render separator for each row
-    if !keyCols.isEmpty then
-      Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.default Term.default "|"
-  return (vr.offset, cols, keyW)
+    if sepX > 0 then Term.print sepX.toUInt32 (i + 1).toUInt32 Term.default Term.default "|"
+  return (vr.offset, cols, sepX)
 
 -- | Format number with comma separators (1000000 -> "1,000,000")
 def fmtNum (n : Nat) : String :=
