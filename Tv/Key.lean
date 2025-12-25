@@ -88,18 +88,36 @@ def g (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.
 -- | G - go to end
 def G (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.goEnd c.nr })
 
--- | 0 - first column (meta: select rows with null%)
+-- | Check if null% is 100% (fully null column)
+def isFullNull (s : String) : Bool := s == "100%"
+
+-- | Theorem: "100%" matches isFullNull
+theorem isFullNull_100 : isFullNull "100%" = true := rfl
+
+-- | Theorem: "0%" does not match isFullNull
+theorem isFullNull_0 : isFullNull "0%" = false := rfl
+
+-- | Theorem: "50%" does not match isFullNull
+theorem isFullNull_50 : isFullNull "50%" = false := rfl
+
+-- | Pure: select rows where null% (col 4) is "100%"
+def selectFullNull (tbl : Table) : List Nat :=
+  (List.range tbl.nRows).filter fun r =>
+    match tbl.get r 4 with
+    | .str s => isFullNull s
+    | _ => false
+
+-- | Theorem: selectFullNull filters exactly rows with isFullNull (by def)
+theorem selectFullNull_def (tbl : Table) :
+    selectFullNull tbl = (List.range tbl.nRows).filter fun r =>
+      match tbl.get r 4 with | .str s => isFullNull s | _ => false := rfl
+
+-- | 0 - first column (meta: select rows with 100% null)
 def zero (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
   | .colMeta =>
     match c.v.cache with
-    | some tbl =>
-      -- select rows where null% (col 4) is not "0%"
-      let sel := (List.range tbl.nRows).filter fun r =>
-        match tbl.get r 4 with
-        | .str s => s != "0%"
-        | _ => false
-      pure (c.s.setCur { c.v with selRows := sel })
+    | some tbl => pure (c.s.setCur { c.v with selRows := selectFullNull tbl })
     | none => pure c.s
   | _ =>
     let first := Render.displayOrder c.v.keyCols c.nc |>.headD 0
@@ -284,14 +302,35 @@ def retLr (c : KeyCtx) : KeyResult := do
       runBat path
       pure c.s
 
+-- | Pure: compute new parent view with selected rows as keyCols
+-- Cursor moves to first key col (always visible, pinned left)
+def retMetaPure (selRows : List Nat) (parent : View) : View :=
+  let firstKey := selRows.headD 0
+  { parent with keyCols := selRows, colVP := ⟨firstKey, 0⟩ }
+
+-- | Theorem: cursor is on first key col
+theorem retMetaPure_cursor_eq (sel : List Nat) (parent : View) :
+    (retMetaPure sel parent).colVP.cursor = sel.headD 0 := rfl
+
+-- | Theorem: cursor is in keyCols (visible) when sel not empty
+theorem retMetaPure_cursor_in_keys (sel : List Nat) (parent : View) (h : sel ≠ []) :
+    (retMetaPure sel parent).colVP.cursor ∈ (retMetaPure sel parent).keyCols := by
+  simp [retMetaPure]
+  cases sel with
+  | nil => contradiction
+  | cons x xs => simp
+
+-- | Theorem: Meta 0 Enter sets keyCols = selectFullNull
+-- Chain: zero sets selRows = selectFullNull tbl, retMetaPure sets keyCols = selRows
+theorem meta0Enter_keyCols (tbl : Table) (parent : View) :
+    (retMetaPure (selectFullNull tbl) parent).keyCols = selectFullNull tbl := rfl
+
 -- | ret on colMeta: pop to parent with selected rows as keyCols
--- Note: row i in meta = column i in parent (meta rows are parent columns)
 def retMeta (c : KeyCtx) : KeyResult := do
   if c.v.selRows.isEmpty then pure c.s
   else match c.s.views.tail? with
   | some (parent :: rest) =>
-    let newParent := { parent with keyCols := c.v.selRows }
-    pure { c.s with views := newParent :: rest }
+    pure { c.s with views := retMetaPure c.v.selRows parent :: rest }
   | _ => pure c.s
 
 -- | ret - enter key (dispatch by ViewKind)
@@ -393,11 +432,11 @@ def q (c : KeyCtx) : KeyResult := do
   if c.s.views.length > 1 then pure c.s.pop
   else pure { c.s with quit := true }
 
--- | Esc - clear selection or pop
+-- | Esc - clear selections (cols or rows)
 def esc (c : KeyCtx) : KeyResult := do
   if !c.v.selCols.isEmpty then pure (c.s.setCur { c.v with selCols := [] })
-  else if c.s.views.length > 1 then pure c.s.pop
-  else pure { c.s with quit := true }
+  else if !c.v.selRows.isEmpty then pure (c.s.setCur { c.v with selRows := [] })
+  else pure c.s  -- no-op if nothing selected
 
 -- | Ctrl-C - quit
 def ctrlC (_ : KeyCtx) (s : State) : KeyResult := pure { s with quit := true }
