@@ -160,6 +160,18 @@ def cellToPrql : Cell → String
   | .str s => s!"'{s}'"
   | .bool b => if b then "true" else "false"
 
+-- | Key handler context (common params for all handlers)
+structure KeyCtx where
+  s  : State         -- app state
+  v  : View          -- current view
+  di : DisplayInfo   -- display info (no cell access)
+  nr : Nat           -- row count
+  nc : Nat           -- col count
+  pg : Nat           -- page size
+
+-- | Key handler result
+abbrev KeyResult := IO State
+
 -- | Run fzf picker (suspends terminal)
 def runFzf (opts : List String) (input : String) : IO (Option String) := do
   Term.shutdown
@@ -206,332 +218,364 @@ def runFzfMulti (opts : List String) (input : String) : IO (List String) := do
   let _ ← Term.init
   return out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty)
 
--- | Handle key event (takes DisplayInfo, not Table - no cell access)
-def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) : IO State := do
-  let v := s.cur
-  let nr := di.nRows
-  let nc := di.nCols
-  let pageSize := max 1 (screenH - 2)
-  -- input mode: collect chars until Enter
+namespace Key
+
+-- | j - move down
+def j (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.moveRight c.nr })
+
+-- | k - move up
+def k (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.moveLeft })
+
+-- | l - move right
+def l (c : KeyCtx) : KeyResult := do
+  let next := Render.nextInDisplay c.v.keyCols c.nc c.v.colVP.cursor
+  pure (c.s.setCur { c.v with colVP := ⟨next, c.v.colVP.offset⟩ })
+
+-- | h - move left
+def h (c : KeyCtx) : KeyResult := do
+  let prev := Render.prevInDisplay c.v.keyCols c.nc c.v.colVP.cursor
+  pure (c.s.setCur { c.v with colVP := ⟨prev, c.v.colVP.offset⟩ })
+
+-- | Ctrl-D - page down
+def ctrlD (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.pageDown c.pg c.nr })
+
+-- | Ctrl-U - page up
+def ctrlU (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.pageUp c.pg })
+
+-- | g - go to top
+def g (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.goTop })
+
+-- | G - go to end
+def G (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.goEnd c.nr })
+
+-- | 0 - first column
+def zero (c : KeyCtx) : KeyResult := do
+  let first := Render.displayOrder c.v.keyCols c.nc |>.headD 0
+  pure (c.s.setCur { c.v with colVP := ⟨first, 0⟩ })
+
+-- | $ - last column
+def dollar (c : KeyCtx) : KeyResult := do
+  let last := Render.displayOrder c.v.keyCols c.nc |>.getLast? |>.getD 0
+  pure (c.s.setCur { c.v with colVP := ⟨last, c.v.colVP.offset⟩ })
+
+-- | [ - sort ascending
+def lbrak (c : KeyCtx) : KeyResult := do
+  let colName := c.di.colNames.getD c.v.colVP.cursor "?"
+  let prql := c.v.prql ++ " | sort {" ++ colName ++ "}"
+  pure (c.s.setCur (c.v.copy (prql := prql)))
+
+-- | ] - sort descending
+def rbrak (c : KeyCtx) : KeyResult := do
+  let colName := c.di.colNames.getD c.v.colVP.cursor "?"
+  let prql := c.v.prql ++ " | sort {-" ++ colName ++ "}"
+  pure (c.s.setCur (c.v.copy (prql := prql)))
+
+-- | D - delete column(s)
+def D (c : KeyCtx) : KeyResult := do
+  let delCols := if c.v.selCols.isEmpty then [c.v.colVP.cursor] else c.v.selCols
+  let delNames := delCols.map fun i => c.di.colNames.getD i "?"
+  let allCols := c.di.colNames.toList.filter (!delNames.contains ·) |>.map quoteName
+  if allCols.length > 0 then
+    let selPrql := c.v.prql ++ " | select {" ++ String.intercalate ", " allCols ++ "}"
+    let prevDel := if c.v.disp.startsWith "del " then c.v.disp.drop 4 else ""
+    let delStr := String.intercalate "," delNames
+    let newDisp := if prevDel.isEmpty then s!"del {delStr}" else s!"del {prevDel},{delStr}"
+    let newColVP := if c.v.colVP.cursor ≥ c.nc - delCols.length then c.v.colVP.moveLeft else c.v.colVP
+    let v' := { c.v.copy (prql := selPrql) with disp := newDisp, colVP := newColVP, selCols := [] }
+    pure (c.s.setCur v'.invalidate)
+  else pure c.s
+
+-- | @ - column jump with fzf
+def atSign (c : KeyCtx) : KeyResult := do
+  let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
+  match ← runFzf ["--prompt=Column: "] colNamesStr with
+  | some col =>
+    match c.di.colNames.toList.findIdx? (· == col) with
+    | some idx => pure (c.s.setCur { c.v with colVP := Viewport.goto idx c.nc })
+    | none => pure c.s
+  | none => pure c.s
+
+-- | \ - filter with fzf
+def backslash (c : KeyCtx) : KeyResult := do
+  let colName := c.di.colNames.getD c.v.colVP.cursor "?"
+  match ← Backend.queryDistinct c.v.prql c.v.path colName with
+  | .ok vals =>
+    match ← runFzf ["--prompt=Filter " ++ colName ++ ": "] (String.intercalate "\n" vals) with
+    | some val =>
+      let quotedVal := "'" ++ val.replace "'" "''" ++ "'"
+      let filterPrql := c.v.prql ++ " | filter " ++ colName ++ " == " ++ quotedVal
+      let fv : View := ⟨c.v.path, filterPrql, s!"filter {colName}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
+      pure (c.s.push fv)
+    | none => pure c.s
+  | .error _ => pure c.s
+
+-- | s - select columns
+def s (c : KeyCtx) : KeyResult := do
+  if c.s.testMode then
+    pure { c.s with inputMode := .selectCols, inputBuf := "" }
+  else
+    let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
+    let selected ← runFzfMulti ["--prompt=Select: "] colNamesStr
+    if selected.length > 0 then
+      let quoted := selected.map quoteName
+      let selPrql := c.v.prql ++ " | select {" ++ String.intercalate ", " quoted ++ "}"
+      pure (c.s.setCur (c.v.copy (prql := selPrql)))
+    else pure c.s
+
+-- | M - meta view
+def M (c : KeyCtx) : KeyResult := do
+  match ← Backend.queryMeta c.v.prql c.v.path with
+  | .ok metaTbl =>
+    let mv : View := ⟨c.v.path, c.v.prql, "meta", Viewport.create, Viewport.create, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
+    pure (c.s.push mv)
+  | .error e => pure (c.s.setMsg s!"meta error: {e}")
+
+-- | I - info box
+def I (c : KeyCtx) : KeyResult := do
+  let iv : View := ⟨c.v.path, c.v.prql, "", Viewport.create, Viewport.create, .info c.v.colVP.cursor c.v.rowVP.cursor, c.v.cache, c.v.keyCols, c.v.selCols, c.v.total, c.v.decimals⟩
+  pure (c.s.push iv)
+
+-- | F - frequency view
+def F (c : KeyCtx) : KeyResult := do
+  let (cols, colStr) := if c.v.keyCols.isEmpty then
+    let name := c.di.colNames.getD c.v.colVP.cursor "?"
+    ([name], name)
+  else
+    let names := c.v.keyCols.map fun i => c.di.colNames.getD i "?"
+    (names, String.intercalate "," names)
+  let freqPrql := if cols.length == 1 then
+    c.v.prql ++ " | freq " ++ cols.head!
+  else
+    c.v.prql ++ " | group {" ++ colStr ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
+  let freqKeys := List.range cols.length
+  let fv : View := ⟨c.v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, freqKeys, [], none, 3⟩
+  pure (c.s.push fv)
+
+-- | ret - enter key (context-dependent)
+def ret (c : KeyCtx) : KeyResult := do
+  match c.v.vkind with
+  | .freqV colNames =>
+    -- freq view: push filtered view
+    let cols := colNames.splitOn "," |>.map String.trim
+    match ← Backend.queryRow c.v.prql c.v.path c.v.rowVP.cursor cols.length with
+    | .error _ => pure c.s
+    | .ok vals =>
+      let filters := (List.range cols.length).zip cols |>.map fun (i, cn) =>
+        let val := vals.getD i .null
+        s!"{cn} == {cellToPrql val}"
+      let filterExpr := String.intercalate " && " filters
+      let parentPrql := match c.s.views.tail? with
+        | some (pv :: _) => pv.prql
+        | _ => "from df"
+      let filterPrql := s!"{parentPrql} | filter {filterExpr}"
+      let fv : View := ⟨c.v.path, filterPrql, s!"filter {filterExpr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
+      pure (c.s.push fv)
+  | _ =>
+    -- folder view: enter folder or open file
+    if c.v.path.startsWith "source:ls" then
+      match ← Backend.queryRow c.v.prql c.v.path c.v.rowVP.cursor 9 with
+      | .error _ => pure c.s
+      | .ok vals =>
+        let perms := match vals.getD 0 .null with | .str str => str | _ => ""
+        let name := match vals.getD 8 .null with | .str str => str | _ => ""
+        if name.isEmpty then pure c.s
+        else
+          let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
+          let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
+          if perms.startsWith "d" then
+            let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+            pure (c.s.push lsv)
+          else
+            runBat fullPath
+            pure c.s
+    else pure c.s
+
+-- | T - duplicate view
+def T (c : KeyCtx) : KeyResult := pure c.s.dupView
+
+-- | S - swap views
+def S (c : KeyCtx) : KeyResult := pure c.s.swapViews
+
+-- | ! - toggle key column
+def excl (c : KeyCtx) : KeyResult := do
+  let cols := if c.v.selCols.isEmpty then [c.v.colVP.cursor] else c.v.selCols
+  let allIn := cols.all c.v.keyCols.contains
+  let newKeys := if allIn then c.v.keyCols.filter (!cols.contains ·)
+                 else c.v.keyCols ++ cols.filter (!c.v.keyCols.contains ·)
+  pure (c.s.setCur { c.v with keyCols := newKeys, selCols := [] })
+
+-- | Space - toggle column selection
+def space (c : KeyCtx) : KeyResult := do
+  let col := c.v.colVP.cursor
+  let newSel := if c.v.selCols.contains col then c.v.selCols.filter (· != col)
+                else c.v.selCols ++ [col]
+  pure (c.s.setCur { c.v with selCols := newSel })
+
+-- | b - aggregate by key columns
+def b (c : KeyCtx) : KeyResult := do
+  if c.v.keyCols.isEmpty then pure { c.s with msg := "No key columns set (use !)" }
+  else
+    let keyNames := c.v.keyCols.map fun i => c.di.colNames.getD i "?"
+    let aggCols := if c.v.selCols.isEmpty then [c.v.colVP.cursor] else c.v.selCols
+    let aggNames := aggCols.map fun i => c.di.colNames.getD i "?"
+    let aggExprs := aggNames.map fun n => s!"sum_{n} = sum {n}, cnt_{n} = count {n}"
+    let aggPrql := c.v.prql ++ " | group {" ++ String.intercalate ", " keyNames ++
+                   "} (aggregate {" ++ String.intercalate ", " aggExprs ++ "})"
+    let av : View := ⟨c.v.path, aggPrql, "agg", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+    pure (c.s.push av)
+
+-- | : - command mode
+def colon (c : KeyCtx) : KeyResult := do
+  if c.s.testMode then pure { c.s with inputMode := .command, inputBuf := "" }
+  else
+    match ← runFzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" with
+    | some cmd =>
+      let sv : View := ⟨s!"source:{cmd}", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+      pure (c.s.push sv)
+    | none => pure c.s
+
+-- | ^ - rename column
+def caret (c : KeyCtx) : KeyResult := do
+  if c.s.testMode then pure { c.s with inputMode := .renameTo, inputBuf := "" }
+  else pure c.s
+
+-- | . - increase decimals
+def dot (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with decimals := c.v.decimals + 1, cache := none })
+
+-- | , - decrease decimals
+def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with decimals := if c.v.decimals > 0 then c.v.decimals - 1 else 0, cache := none })
+
+-- | L - load file
+def L (c : KeyCtx) : KeyResult := do
+  match ← runFzf ["--prompt=Load: "] "" with
+  | some path =>
+    let lv : View := ⟨path, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+    pure (c.s.push lv)
+  | none => pure c.s
+
+-- | r - list directory
+def r (c : KeyCtx) : KeyResult := do
+  let rv : View := ⟨"source:ls", "from df", "ls ./", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+  pure (c.s.push rv)
+
+-- | q - quit/pop
+def q (c : KeyCtx) : KeyResult := do
+  if c.s.views.length > 1 then pure c.s.pop
+  else pure { c.s with quit := true }
+
+-- | Esc - clear selection or pop
+def esc (c : KeyCtx) : KeyResult := do
+  if !c.v.selCols.isEmpty then pure (c.s.setCur { c.v with selCols := [] })
+  else if c.s.views.length > 1 then pure c.s.pop
+  else pure { c.s with quit := true }
+
+-- | Ctrl-C - quit
+def ctrlC (_ : KeyCtx) (s : State) : KeyResult := pure { s with quit := true }
+
+end Key
+
+-- | Handle input modes (collecting chars until Enter)
+def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO (Option State) := do
   match s.inputMode with
   | .selectCols =>
     if ev.key == Term.keyEnter || ev.ch == 13 then
-      -- execute select with collected input
       let cols := s.inputBuf.splitOn "," |>.map String.trim |>.filter (!·.isEmpty)
       if cols.length > 0 then
         let quoted := cols.map quoteName
         let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " quoted ++ "}"
-        return { s.setCur (v.copy (prql := selPrql)) with inputMode := .none, inputBuf := "" }
-      else
-        return { s with inputMode := .none, inputBuf := "" }
-    else if ev.ch > 0 then
-      return { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
-    else
-      return s
+        return some { s.setCur (v.copy (prql := selPrql)) with inputMode := .none, inputBuf := "" }
+      else return some { s with inputMode := .none, inputBuf := "" }
+    else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
+    else return some s
   | .renameTo =>
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let newName := s.inputBuf.trim
       if !newName.isEmpty then
-        let col := v.colVP.cursor
-        let oldName := di.colNames.getD col "?"
-        -- Build select with all columns, replacing old with new
-        let allCols := di.colNames.toList.map fun n =>
-          if n == oldName then quoteName newName else quoteName n
+        let oldName := di.colNames.getD v.colVP.cursor "?"
+        let allCols := di.colNames.toList.map fun n => if n == oldName then quoteName newName else quoteName n
         let renamePrql := v.prql ++ " | derive {" ++ quoteName newName ++ " = " ++ quoteName oldName ++
                           "} | select {" ++ String.intercalate ", " allCols ++ "}"
-        return { s.setCur (v.copy (prql := renamePrql)) with inputMode := .none, inputBuf := "" }
-      else
-        return { s with inputMode := .none, inputBuf := "" }
-    else if ev.ch > 0 then
-      return { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
-    else
-      return s
+        return some { s.setCur (v.copy (prql := renamePrql)) with inputMode := .none, inputBuf := "" }
+      else return some { s with inputMode := .none, inputBuf := "" }
+    else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
+    else return some s
   | .filterExpr =>
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let expr := s.inputBuf.trim
       if !expr.isEmpty then
         let filterPrql := v.prql ++ " | filter " ++ expr
-        return { s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
-      else
-        return { s with inputMode := .none, inputBuf := "" }
-    else if ev.ch > 0 then
-      return { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
-    else
-      return s
+        return some { s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
+      else return some { s with inputMode := .none, inputBuf := "" }
+    else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
+    else return some s
   | .command =>
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let cmd := s.inputBuf.trim
-      -- parse command (freq, lr, filter, etc.)
       if cmd.startsWith "freq " then
         let cols := cmd.drop 5 |>.trim
         let colList := cols.splitOn "," |>.map String.trim
-        -- multi-column freq: group by all, count, pct, bar, sort
         let freqPrql := v.prql ++ " | group {" ++ cols ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
-        let freqKeys := List.range colList.length
-        let fv : View := ⟨v.path, freqPrql, s!"freq {cols}", Viewport.create, Viewport.create, .freqV cols, none, freqKeys, [], none, 3⟩
-        return { s.push fv with inputMode := .none, inputBuf := "" }
+        let fv : View := ⟨v.path, freqPrql, s!"freq {cols}", Viewport.create, Viewport.create, .freqV cols, none, List.range colList.length, [], none, 3⟩
+        return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
         let lrPrql := s!"from (read_csv('{dir}/**/*', union_by_name=true, filename=true))"
         let lrv : View := ⟨dir, lrPrql, "lr", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-        return { s.push lrv with inputMode := .none, inputBuf := "" }
+        return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
         let filterPrql := v.prql ++ " | filter " ++ expr
-        return { s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
-      else
-        return { s with inputMode := .none, inputBuf := "", msg := s!"unknown: {cmd}" }
-    else if ev.ch > 0 then
-      return { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
-    else
-      return s
-  | .none =>
-  -- movement keys
-  if ev.key == Term.keyArrowDown || ev.ch == chJ then
-    return s.setCur { v with rowVP := v.rowVP.moveRight nr }
-  else if ev.key == Term.keyArrowUp || ev.ch == chK then
-    return s.setCur { v with rowVP := v.rowVP.moveLeft }
-  else if ev.key == Term.keyArrowRight || ev.ch == chL then
-    let next := Render.nextInDisplay v.keyCols nc v.colVP.cursor
-    return s.setCur { v with colVP := ⟨next, v.colVP.offset⟩ }
-  else if ev.key == Term.keyArrowLeft || ev.ch == chH then
-    let prev := Render.prevInDisplay v.keyCols nc v.colVP.cursor
-    return s.setCur { v with colVP := ⟨prev, v.colVP.offset⟩ }
-  -- page up/down (Ctrl-D/U: ch=4/21 in test mode, key in real terminal)
-  else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then
-    return s.setCur { v with rowVP := v.rowVP.pageDown pageSize nr }
-  else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then
-    return s.setCur { v with rowVP := v.rowVP.pageUp pageSize }
-  -- home/end rows (g/G)
-  else if ev.key == Term.keyHome || ev.ch == chG then
-    return s.setCur { v with rowVP := Viewport.goTop }
-  else if ev.key == Term.keyEnd || ev.ch == chGG then
-    return s.setCur { v with rowVP := Viewport.goEnd nr }
-  -- first/last column (0/$)
-  else if ev.ch == ch0 then
-    let first := Render.displayOrder v.keyCols nc |>.headD 0
-    return s.setCur { v with colVP := ⟨first, 0⟩ }
-  else if ev.ch == chDollar then
-    let last := Render.displayOrder v.keyCols nc |>.getLast? |>.getD 0
-    return s.setCur { v with colVP := ⟨last, v.colVP.offset⟩ }
-  -- sort asc/desc
-  else if ev.ch == chLBrack then
-    let col := v.colVP.cursor
-    let colName := di.colNames.getD col "?"
-    let sortPrql := v.prql ++ " | sort {" ++ colName ++ "}"
-    return s.setCur (v.copy (prql := sortPrql))
-  else if ev.ch == chRBrack then
-    let col := v.colVP.cursor
-    let colName := di.colNames.getD col "?"
-    let sortPrql := v.prql ++ " | sort {-" ++ colName ++ "}"
-    return s.setCur (v.copy (prql := sortPrql))
-  -- delete column(s): use selected cols if any, else cursor
-  else if ev.ch == chD then
-    let delCols := if v.selCols.isEmpty then [v.colVP.cursor] else v.selCols
-    let delNames := delCols.map fun i => di.colNames.getD i "?"
-    let allCols := di.colNames.toList.filter (!delNames.contains ·) |>.map quoteName
-    if allCols.length > 0 then
-      let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " allCols ++ "}"
-      -- disp shows cumulative deleted columns
-      let prevDel := if v.disp.startsWith "del " then v.disp.drop 4 else ""
-      let delStr := String.intercalate "," delNames
-      let newDisp := if prevDel.isEmpty then s!"del {delStr}" else s!"del {prevDel},{delStr}"
-      let newColVP := if v.colVP.cursor ≥ nc - delCols.length then v.colVP.moveLeft else v.colVP
-      let v' := { v.copy (prql := selPrql) with disp := newDisp, colVP := newColVP, selCols := [] }
-      return s.setCur v'.invalidate
-    else return s
-  -- column jump (@)
-  else if ev.ch == chAt then
-    let colNamesStr := di.colNames.toList |> String.intercalate "\n"
-    match ← runFzf ["--prompt=Column: "] colNamesStr with
-    | some col =>
-      match di.colNames.toList.findIdx? (· == col) with
-      | some idx => return s.setCur { v with colVP := Viewport.goto idx nc }
-      | none => return s
-    | none => return s
-  -- filter (\) - query all distinct values, push new view
-  else if ev.ch == chBackslash then
-    let col := v.colVP.cursor
-    let colName := di.colNames.getD col "?"
-    match ← Backend.queryDistinct v.prql v.path colName with
-    | .ok vals =>
-      match ← runFzf ["--prompt=Filter " ++ colName ++ ": "] (String.intercalate "\n" vals) with
-      | some val =>
-        let quotedVal := "'" ++ val.replace "'" "''" ++ "'"
-        let filterPrql := v.prql ++ " | filter " ++ colName ++ " == " ++ quotedVal
-        let fv : View := ⟨v.path, filterPrql, s!"filter {colName}", Viewport.create, Viewport.create, .tbl, none, [], [], none, v.decimals⟩
-        return s.push fv
-      | none => return s
-    | .error _ => return s
-  -- select columns (s) - use input mode in test mode
-  else if ev.ch == chS then
-    if s.testMode then
-      return { s with inputMode := .selectCols, inputBuf := "" }
-    else
-      let colNamesStr := di.colNames.toList |> String.intercalate "\n"
-      let selected ← runFzfMulti ["--prompt=Select: "] colNamesStr
-      if selected.length > 0 then
-        let quoted := selected.map quoteName
-        let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " quoted ++ "}"
-        return s.setCur (v.copy (prql := selPrql))
-      else return s
-  -- meta view: query column stats from backend (full data)
-  else if ev.ch == chM then
-    match ← Backend.queryMeta v.prql v.path with
-    | .ok metaTbl =>
-      let mv : View := ⟨v.path, v.prql, "meta", Viewport.create, Viewport.create, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
-      return s.push mv
-    | .error e =>
-      return s.setMsg s!"meta error: {e}"
-  -- info box (I) - show cell/column details
-  else if ev.ch == chI then
-    let col := v.colVP.cursor
-    let row := v.rowVP.cursor
-    let iv : View := ⟨v.path, v.prql, "", Viewport.create, Viewport.create, .info col row, v.cache, v.keyCols, v.selCols, v.total, v.decimals⟩
-    return s.push iv
-  -- freq: use key columns if set, else cursor column
-  else if ev.ch == chF then
-    let (cols, colStr) := if v.keyCols.isEmpty then
-      let col := v.colVP.cursor
-      let name := di.colNames.getD col "?"
-      ([name], name)
-    else
-      let names := v.keyCols.map fun i => di.colNames.getD i "?"
-      (names, String.intercalate "," names)
-    let freqPrql := if cols.length == 1 then
-      v.prql ++ " | freq " ++ cols.head!
-    else
-      v.prql ++ " | group {" ++ colStr ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
-    -- set keyCols to grouped columns for | separator display
-    let freqKeys := List.range cols.length
-    let fv : View := ⟨v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, freqKeys, [], none, 3⟩
-    return s.push fv
-  -- enter: in freq view, push filtered view (keeps freq in stack)
-  -- enter: in folder view (source:ls), open file with bat or enter folder
-  else if ev.key == Term.keyEnter || ev.ch == 13 then
-    match v.vkind with
-    | .freqV colNames =>
-      let selRow := v.rowVP.cursor
-      let cols := colNames.splitOn "," |>.map String.trim
-      match ← Backend.queryRow v.prql v.path selRow cols.length with
-      | .error _ => return s
-      | .ok vals =>
-        let filters := (List.range cols.length).zip cols |>.map fun (i, c) =>
-          let val := vals.getD i .null
-          s!"{c} == {cellToPrql val}"
-        let filterExpr := String.intercalate " && " filters
-        -- get parent's prql to build filter on original data
-        let parentPrql := match s.views.tail? with
-          | some (pv :: _) => pv.prql
-          | _ => "from df"
-        let filterPrql := s!"{parentPrql} | filter {filterExpr}"
-        let fv : View := ⟨v.path, filterPrql, s!"filter {filterExpr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, v.decimals⟩
-        return s.push fv
-    | _ =>
-      -- folder view: source:ls or source:ls:/path
-      if v.path.startsWith "source:ls" then
-        let selRow := v.rowVP.cursor
-        -- query row: col 0 = permissions, col 8 = name
-        match ← Backend.queryRow v.prql v.path selRow 9 with
-        | .error _ => return s
-        | .ok vals =>
-          let perms := match vals.getD 0 .null with | .str s => s | _ => ""
-          let name := match vals.getD 8 .null with | .str s => s | _ => ""
-          if name.isEmpty then return s
-          -- get base dir from path
-          let baseDir := if v.path == "source:ls" then "."
-                         else v.path.drop 10  -- drop "source:ls:"
-          let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
-          if perms.startsWith "d" then
-            -- directory: push new ls view
-            let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-            return s.push lsv
-          else
-            -- file: open with bat
-            runBat fullPath
-            return s
-      else return s
-  -- duplicate view (T)
-  else if ev.ch == chT then
-    return s.dupView
-  -- swap top two views (S)
-  else if ev.ch == chSS then
-    return s.swapViews
-  -- toggle key column (!) - if selected cols exist, use those; else cursor
-  else if ev.ch == chExcl then
-    let cols := if v.selCols.isEmpty then [v.colVP.cursor] else v.selCols
-    let allIn := cols.all v.keyCols.contains
-    let newKeys := if allIn
-      then v.keyCols.filter (!cols.contains ·)
-      else v.keyCols ++ cols.filter (!v.keyCols.contains ·)
-    return s.setCur { v with keyCols := newKeys, selCols := [] }
-  -- toggle column selection (Space)
-  else if ev.ch == chSpace then
-    let col := v.colVP.cursor
-    let newSel := if v.selCols.contains col
-      then v.selCols.filter (· != col)
-      else v.selCols ++ [col]
-    return s.setCur { v with selCols := newSel }
-  -- aggregate by key columns (b)
-  -- sum selected columns, count all
-  else if ev.ch == chB then
-    if v.keyCols.isEmpty then return { s with msg := "No key columns set (use !)" }
-    let keyNames := v.keyCols.map fun i => di.colNames.getD i "?"
-    let aggCols := if v.selCols.isEmpty then [v.colVP.cursor] else v.selCols
-    let aggNames := aggCols.map fun i => di.colNames.getD i "?"
-    let aggExprs := aggNames.map fun n => s!"sum_{n} = sum {n}, cnt_{n} = count {n}"
-    let aggPrql := v.prql ++ " | group {" ++ String.intercalate ", " keyNames ++
-                   "} (aggregate {" ++ String.intercalate ", " aggExprs ++ "})"
-    let av : View := ⟨v.path, aggPrql, "agg", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-    return s.push av
-  -- command mode (:) - use input mode in test mode
-  else if ev.ch == chColon then
-    if s.testMode then
-      return { s with inputMode := .command, inputBuf := "" }
-    else
-      let cmds := "ps\nenv\ndf\nls\ntcp"
-      match ← runFzf ["--prompt=: "] cmds with
-      | some cmd =>
-        let srcPath := s!"source:{cmd}"
-        let sv : View := ⟨srcPath, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-        return s.push sv
-      | none => return s
-  -- rename column (^)
-  else if ev.ch == chCaret then
-    if s.testMode then
-      return { s with inputMode := .renameTo, inputBuf := "" }
-    else
-      -- In interactive mode, could use fzf prompt for new name
-      return s
-  -- increase decimals (.)
-  else if ev.ch == chDot then
-    return s.setCur { v with decimals := v.decimals + 1, cache := none }
-  -- decrease decimals (,)
-  else if ev.ch == chComma then
-    return s.setCur { v with decimals := if v.decimals > 0 then v.decimals - 1 else 0, cache := none }
-  -- load file (L)
-  else if ev.ch == chLL then
-    match ← runFzf ["--prompt=Load: "] "" with
-    | some path =>
-      let lv : View := ⟨path, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-      return s.push lv
-    | none => return s
-  -- list directory (r)
-  else if ev.ch == chR then
-    let rv : View := ⟨"source:ls", "from df", "ls ./", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-    return s.push rv
-  -- quit/pop: pop view or quit if at root
-  else if ev.ch == chQ then
-    if s.views.length > 1 then return s.pop
-    else return { s with quit := true }
-  -- Esc: clear selection, or pop if no selection
-  else if ev.key == Term.keyEsc then
-    if !v.selCols.isEmpty then return s.setCur { v with selCols := [] }
-    else if s.views.length > 1 then return s.pop
-    else return { s with quit := true }
-  else if ev.ch == chCtrlC then
-    return { s with quit := true }
-  else return s
+        return some { s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
+      else return some { s with inputMode := .none, inputBuf := "", msg := s!"unknown: {cmd}" }
+    else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
+    else return some s
+  | .none => return none  -- not in input mode
+
+-- | Handle key event (takes DisplayInfo, not Table - no cell access)
+def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) : IO State := do
+  let v := s.cur
+  -- handle input mode first
+  match ← handleInput s v di ev with
+  | some s' => return s'
+  | none =>
+  -- build context for key handlers
+  let c : KeyCtx := ⟨s, v, di, di.nRows, di.nCols, max 1 (screenH - 2)⟩
+  -- dispatch to key handlers
+  if ev.key == Term.keyArrowDown || ev.ch == chJ then Key.j c
+  else if ev.key == Term.keyArrowUp || ev.ch == chK then Key.k c
+  else if ev.key == Term.keyArrowRight || ev.ch == chL then Key.l c
+  else if ev.key == Term.keyArrowLeft || ev.ch == chH then Key.h c
+  else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then Key.ctrlD c
+  else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then Key.ctrlU c
+  else if ev.key == Term.keyHome || ev.ch == chG then Key.g c
+  else if ev.key == Term.keyEnd || ev.ch == chGG then Key.G c
+  else if ev.ch == ch0 then Key.zero c
+  else if ev.ch == chDollar then Key.dollar c
+  else if ev.ch == chLBrack then Key.lbrak c
+  else if ev.ch == chRBrack then Key.rbrak c
+  else if ev.ch == chD then Key.D c
+  else if ev.ch == chAt then Key.atSign c
+  else if ev.ch == chBackslash then Key.backslash c
+  else if ev.ch == chS then Key.s c
+  else if ev.ch == chM then Key.M c
+  else if ev.ch == chI then Key.I c
+  else if ev.ch == chF then Key.F c
+  else if ev.key == Term.keyEnter || ev.ch == 13 then Key.ret c
+  else if ev.ch == chT then Key.T c
+  else if ev.ch == chSS then Key.S c
+  else if ev.ch == chExcl then Key.excl c
+  else if ev.ch == chSpace then Key.space c
+  else if ev.ch == chB then Key.b c
+  else if ev.ch == chColon then Key.colon c
+  else if ev.ch == chCaret then Key.caret c
+  else if ev.ch == chDot then Key.dot c
+  else if ev.ch == chComma then Key.comma c
+  else if ev.ch == chLL then Key.L c
+  else if ev.ch == chR then Key.r c
+  else if ev.ch == chQ then Key.q c
+  else if ev.key == Term.keyEsc then Key.esc c
+  else if ev.ch == chCtrlC then pure { s with quit := true }
+  else pure s
 
 -- | Main event loop
 partial def loop (s : State) : IO Unit := do
