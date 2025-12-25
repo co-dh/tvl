@@ -232,12 +232,12 @@ def tabLine (path : String) (disps : List (String × String)) (y : UInt32) : IO 
 
 -- | Render status bar at bottom
 def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
-              (cols : Array Column) (y : UInt32) (msg : String := "") : IO Unit := do
+              (colNames : Array String) (y : UInt32) (msg : String := "") : IO Unit := do
   -- left side: message or key/sel columns
   let left := if msg.isEmpty then
     let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.length} "
     let selStr := if selCols.isEmpty then ""
-      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun i => (cols.getD i default).name)
+      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun i => colNames.getD i "?")
     s!"{keyStr}{selStr}"
   else msg
   -- right side: mem + row/total

@@ -128,7 +128,6 @@ def chGG : UInt32 := 71  -- 'G'
 def chD : UInt32 := 68   -- 'D'
 def chF : UInt32 := 70   -- 'F' for freq
 def chQ : UInt32 := 113  -- 'q'
-def chQQ : UInt32 := 81  -- 'Q' dump table
 def chCtrlC : UInt32 := 3  -- Ctrl+C
 def chCtrlD : UInt32 := 4  -- Ctrl+D (page down)
 def chCtrlU : UInt32 := 21 -- Ctrl+U (page up)
@@ -196,11 +195,11 @@ def runFzfMulti (opts : List String) (input : String) : IO (List String) := do
   let _ ← Term.init
   return out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty)
 
--- | Handle key event (takes full Event - can't forget fields)
-def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO State := do
+-- | Handle key event (takes DisplayInfo, not Table - no cell access)
+def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) : IO State := do
   let v := s.cur
-  let nr := tbl.nRows
-  let nc := tbl.nCols
+  let nr := di.nRows
+  let nc := di.nCols
   let pageSize := max 1 (screenH - 2)
   -- input mode: collect chars until Enter
   match s.inputMode with
@@ -223,10 +222,10 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
       let newName := s.inputBuf.trim
       if !newName.isEmpty then
         let col := v.colVP.cursor
-        let oldName := tbl.cols.getD col ⟨"?"⟩ |>.name
+        let oldName := di.colNames.getD col "?"
         -- Build select with all columns, replacing old with new
-        let allCols := tbl.cols.toList.map fun c =>
-          if c.name == oldName then quoteName newName else quoteName c.name
+        let allCols := di.colNames.toList.map fun n =>
+          if n == oldName then quoteName newName else quoteName n
         let renamePrql := v.prql ++ " | derive {" ++ quoteName newName ++ " = " ++ quoteName oldName ++
                           "} | select {" ++ String.intercalate ", " allCols ++ "}"
         return { s.setCur (v.copy (prql := renamePrql)) with inputMode := .none, inputBuf := "" }
@@ -305,19 +304,19 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   -- sort asc/desc
   else if ev.ch == chLBrack then
     let col := v.colVP.cursor
-    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let colName := di.colNames.getD col "?"
     let sortPrql := v.prql ++ " | sort {" ++ colName ++ "}"
     return s.setCur (v.copy (prql := sortPrql))
   else if ev.ch == chRBrack then
     let col := v.colVP.cursor
-    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let colName := di.colNames.getD col "?"
     let sortPrql := v.prql ++ " | sort {-" ++ colName ++ "}"
     return s.setCur (v.copy (prql := sortPrql))
   -- delete column(s): use selected cols if any, else cursor
   else if ev.ch == chD then
     let delCols := if v.selCols.isEmpty then [v.colVP.cursor] else v.selCols
-    let delNames := delCols.map fun i => (tbl.cols.getD i ⟨"?"⟩).name
-    let allCols := tbl.cols.toList.map (·.name) |>.filter (!delNames.contains ·) |>.map quoteName
+    let delNames := delCols.map fun i => di.colNames.getD i "?"
+    let allCols := di.colNames.toList.filter (!delNames.contains ·) |>.map quoteName
     if allCols.length > 0 then
       let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " allCols ++ "}"
       -- disp shows cumulative deleted columns
@@ -330,17 +329,17 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
     else return s
   -- column jump (@)
   else if ev.ch == chAt then
-    let colNames := tbl.cols.toList.map (·.name) |> String.intercalate "\n"
-    match ← runFzf ["--prompt=Column: "] colNames with
+    let colNamesStr := di.colNames.toList |> String.intercalate "\n"
+    match ← runFzf ["--prompt=Column: "] colNamesStr with
     | some col =>
-      match tbl.cols.toList.findIdx? (·.name == col) with
+      match di.colNames.toList.findIdx? (· == col) with
       | some idx => return s.setCur { v with colVP := Viewport.goto idx nc }
       | none => return s
     | none => return s
   -- filter (\)
   else if ev.ch == chBackslash then
     let col := v.colVP.cursor
-    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let colName := di.colNames.getD col "?"
     -- get distinct values for current column
     let distinctPrql := v.prql ++ " | select {" ++ colName ++ "} | group {" ++ colName ++ "} (take 1)"
     match ← Backend.query (Backend.mkLimited distinctPrql 1000) v.path with
@@ -357,8 +356,8 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
     if s.testMode then
       return { s with inputMode := .selectCols, inputBuf := "" }
     else
-      let colNames := tbl.cols.toList.map (·.name) |> String.intercalate "\n"
-      let selected ← runFzfMulti ["--prompt=Select: "] colNames
+      let colNamesStr := di.colNames.toList |> String.intercalate "\n"
+      let selected ← runFzfMulti ["--prompt=Select: "] colNamesStr
       if selected.length > 0 then
         let quoted := selected.map quoteName
         let selPrql := v.prql ++ " | select {" ++ String.intercalate ", " quoted ++ "}"
@@ -381,7 +380,7 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   -- freq: push freq view with PRQL
   else if ev.ch == chF then
     let col := v.colVP.cursor
-    let colName := tbl.cols.getD col ⟨"?"⟩ |>.name
+    let colName := di.colNames.getD col "?"
     let freqPrql := v.prql ++ " | freq " ++ colName
     let fv : View := ⟨v.path, freqPrql, s!"freq {colName}", Viewport.create, Viewport.create, .freqV colName, none, [], [], none, 3⟩
     return s.push fv
@@ -390,19 +389,22 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
     match v.vkind with
     | .freqV colNames =>
       let selRow := v.rowVP.cursor
-      -- multi-column: build filter for each column
+      -- multi-column: query backend for row values
       let cols := colNames.splitOn "," |>.map String.trim
-      let filters := (List.range cols.length).zip cols |>.map fun (i, c) =>
-        let val := tbl.get selRow i
-        s!"{c} == {cellToPrql val}"
-      let filterExpr := String.intercalate " && " filters
-      let parent := s.pop
-      match parent.views with
-      | pv :: rest =>
-        let filterPrql := s!"{pv.prql} | filter {filterExpr}"
-        let newPV := (pv.invalidate).copy (prql := filterPrql) (rowVP := Viewport.create)
-        return { parent with views := newPV :: rest }
-      | [] => return s
+      match ← Backend.queryRow v.prql v.path selRow cols.length with
+      | .error _ => return s
+      | .ok vals =>
+        let filters := (List.range cols.length).zip cols |>.map fun (i, c) =>
+          let val := vals.getD i .null
+          s!"{c} == {cellToPrql val}"
+        let filterExpr := String.intercalate " && " filters
+        let parent := s.pop
+        match parent.views with
+        | pv :: rest =>
+          let filterPrql := s!"{pv.prql} | filter {filterExpr}"
+          let newPV := (pv.invalidate).copy (prql := filterPrql) (rowVP := Viewport.create)
+          return { parent with views := newPV :: rest }
+        | [] => return s
     | _ => return s
   -- duplicate view (T)
   else if ev.ch == chT then
@@ -429,9 +431,9 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   -- sum selected columns, count all
   else if ev.ch == chB then
     if v.keyCols.isEmpty then return { s with msg := "No key columns set (use !)" }
-    let keyNames := v.keyCols.map fun i => (tbl.cols.getD i ⟨"?"⟩).name
+    let keyNames := v.keyCols.map fun i => di.colNames.getD i "?"
     let aggCols := if v.selCols.isEmpty then [v.colVP.cursor] else v.selCols
-    let aggNames := aggCols.map fun i => (tbl.cols.getD i ⟨"?"⟩).name
+    let aggNames := aggCols.map fun i => di.colNames.getD i "?"
     let aggExprs := aggNames.map fun n => s!"sum_{n} = sum {n}, cnt_{n} = count {n}"
     let aggPrql := v.prql ++ " | group {" ++ String.intercalate ", " keyNames ++
                    "} (aggregate {" ++ String.intercalate ", " aggExprs ++ "})"
@@ -473,18 +475,6 @@ def handleKey (s : State) (tbl : Table) (ev : Term.Event) (screenH : Nat) : IO S
   else if ev.ch == chR then
     let rv : View := ⟨"source:ls", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
     return s.push rv
-  -- dump table to stdout and quit (Q)
-  else if ev.ch == chQQ then
-    Term.shutdown
-    IO.println s!"PRQL: {v.prql}"
-    IO.println s!"Rows: {tbl.nRows}, Cols: {tbl.nCols}"
-    -- header
-    IO.println (tbl.cols.toList.map (·.name) |> String.intercalate "\t")
-    -- rows (max 50)
-    for r in [:min tbl.nRows 50] do
-      let row := (List.range tbl.nCols).map (fun c => toString (tbl.get r c)) |> String.intercalate "\t"
-      IO.println row
-    return { s with quit := true }
   -- quit/pop: pop view or quit if at root
   else if ev.ch == chQ then
     if s.views.length > 1 then return s.pop
@@ -505,7 +495,9 @@ partial def loop (s : State) : IO Unit := do
   -- fetch table (uses cache if available)
   let (v', tbl) ← v.fetch
   let s := s.setCur v'
-  -- render based on view kind
+  -- extract display info (only way to get metadata for handleKey)
+  let di := tbl.info
+  -- render based on view kind (tbl only used here for rendering)
   let w ← Term.width
   let h ← Term.height
   let (newColOffset, s) ← match v'.vkind with
@@ -514,18 +506,15 @@ partial def loop (s : State) : IO Unit := do
       pure (v'.colVP.offset, s)
     | _ =>
       let off ← Render.table tbl v'.rowVP v'.colVP (h.toNat - 2) w.toNat v'.keyCols v'.decimals
-      -- tab line: path | disp1 | disp2 ... (use disp if set, else prql)
       let disps := s.views.map fun v => (v.disp, v.prql)
       Render.tabLine v'.path disps (h - 2)
-      -- status bar
-      Render.statusBar v'.rowVP.cursor (v'.total.getD tbl.nRows) w.toNat
-                       v'.keyCols v'.selCols tbl.cols (h - 1) s.msg
+      Render.statusBar v'.rowVP.cursor (v'.total.getD di.nRows) w.toNat
+                       v'.keyCols v'.selCols di.colNames (h - 1) s.msg
       Term.present
       pure (off, s)
-  -- update column offset
   let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
   let s := s.setCur v'
-  -- test mode: exit after keys consumed (buffer now has final state)
+  -- test mode: exit after keys consumed
   if s.testMode && s.keys.isEmpty then
     let buf ← Term.bufferStr
     IO.print buf
@@ -539,7 +528,8 @@ partial def loop (s : State) : IO Unit := do
     | [] =>
       let ev ← Term.pollEvent
       pure (ev, s)
-  let s' ← if ev.type == Term.eventKey then handleKey s tbl ev h.toNat else pure s
+  -- handleKey gets DisplayInfo only - no cell access possible
+  let s' ← if ev.type == Term.eventKey then handleKey s di ev h.toNat else pure s
   loop s'
 
 -- | Run app with optional replay keys

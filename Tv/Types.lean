@@ -159,6 +159,17 @@ def freq (t : Table) (c : Nat) : Table :=
 
 end Table
 
--- | INVARIANT: Table in ViewState is display-only chunk, not full dataset.
--- | All aggregations (meta, freq, agg) must query Backend, not cached Table.
-theorem table_is_display_chunk : True := trivial
+-- | INVARIANT: Table is for rendering only. All data ops go through Backend.
+-- | DisplayInfo exposes only metadata needed for navigation/PRQL building.
+structure DisplayInfo where
+  colNames : Array String
+  nRows    : Nat
+  nCols    : Nat
+
+-- | Extract display info from table (only way to get metadata)
+def Table.info (t : Table) : DisplayInfo :=
+  ⟨t.cols.map (·.name), t.nRows, t.nCols⟩
+
+-- | INVARIANT: handleKey receives DisplayInfo, not Table.
+-- | This makes it impossible to access cell data outside rendering.
+theorem display_info_no_cells : True := trivial

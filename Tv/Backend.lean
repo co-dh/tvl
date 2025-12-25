@@ -198,6 +198,18 @@ def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
     else
       return .ok 0
 
+-- | Get cell values for a specific row (for freq Enter filter)
+def queryRow (prql : String) (path : String) (row : Nat) (ncols : Nat) : IO (Except String (List Cell)) := do
+  -- skip row rows, take 1
+  let rowPrql := prql ++ s!" | take {row + 1}"
+  match ← query (mkLimited rowPrql (row + 1)) path with
+  | .error e => return .error e
+  | .ok tbl =>
+    if tbl.nRows > row then
+      return .ok ((List.range ncols).map fun c => tbl.get row c)
+    else
+      return .ok []
+
 -- | Quote column name for PRQL (backticks for special chars)
 def quoteCol (s : String) : String :=
   if s.any (fun c => !c.isAlphanum && c != '_') then s!"`{s}`"
