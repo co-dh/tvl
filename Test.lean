@@ -218,13 +218,21 @@ def test_freq_multi_key_columns : IO Unit := do
   let hdr := header output
   assert (contains tab "freq a,b") s!"Tab should show freq a,b: {tab}"
   assert (contains hdr "Cnt") s!"Header should have Cnt: {hdr}"
+  assert (contains hdr "|") s!"Header should have | separator: {hdr}"
 
 def test_freq_multi_key_enter : IO Unit := do
-  -- Set keys on a and b, F, then Enter filters parent by both
+  -- Set keys on a and b, F, then Enter pushes filtered view
   let output ← runKeys "!l!F<ret>" "tests/data/multi_freq.csv"
   let (_, status) := footer output
   -- First row of freq (a=1,b=x or a=2,b=y with count 2) filters to 2 rows
   assert (endsWith status "/2") s!"Should filter to 2 rows: {status}"
+
+def test_freq_enter_pushes_view : IO Unit := do
+  -- F then Enter should push view, q returns to freq, q again returns to original
+  let output ← runKeys "F<ret>q" "tests/data/basic.csv"
+  let (tab, _) := footer output
+  -- After q from filtered view, should be back at freq view
+  assert (contains tab "freq") s!"Should be at freq view after q: {tab}"
 
 def test_decimal_increase : IO Unit := do
   let output ← runKeys "." "tests/data/floats.csv"
@@ -323,6 +331,7 @@ def main : IO Unit := do
   test_freq_by_key_columns
   test_freq_multi_key_columns
   test_freq_multi_key_enter
+  test_freq_enter_pushes_view
   test_decimal_increase
   test_decimal_decrease
   test_swap_views

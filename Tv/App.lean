@@ -253,9 +253,11 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
       -- parse command (freq, lr, filter, etc.)
       if cmd.startsWith "freq " then
         let cols := cmd.drop 5 |>.trim
+        let colList := cols.splitOn "," |>.map String.trim
         -- multi-column freq: group by all, count, pct, bar, sort
         let freqPrql := v.prql ++ " | group {" ++ cols ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
-        let fv : View := ⟨v.path, freqPrql, s!"freq {cols}", Viewport.create, Viewport.create, .freqV cols, none, [], [], none, 3⟩
+        let freqKeys := List.range colList.length
+        let fv : View := ⟨v.path, freqPrql, s!"freq {cols}", Viewport.create, Viewport.create, .freqV cols, none, freqKeys, [], none, 3⟩
         return { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
@@ -389,14 +391,15 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
       v.prql ++ " | freq " ++ cols.head!
     else
       v.prql ++ " | group {" ++ colStr ++ "} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt}"
-    let fv : View := ⟨v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, [], [], none, 3⟩
+    -- set keyCols to grouped columns for | separator display
+    let freqKeys := List.range cols.length
+    let fv : View := ⟨v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, freqKeys, [], none, 3⟩
     return s.push fv
-  -- enter: in freq view, filter parent by selected value (key=0x0D or ch=13)
+  -- enter: in freq view, push filtered view (keeps freq in stack)
   else if ev.key == Term.keyEnter || ev.ch == 13 then
     match v.vkind with
     | .freqV colNames =>
       let selRow := v.rowVP.cursor
-      -- multi-column: query backend for row values
       let cols := colNames.splitOn "," |>.map String.trim
       match ← Backend.queryRow v.prql v.path selRow cols.length with
       | .error _ => return s
@@ -405,13 +408,13 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
           let val := vals.getD i .null
           s!"{c} == {cellToPrql val}"
         let filterExpr := String.intercalate " && " filters
-        let parent := s.pop
-        match parent.views with
-        | pv :: rest =>
-          let filterPrql := s!"{pv.prql} | filter {filterExpr}"
-          let newPV := (pv.invalidate).copy (prql := filterPrql) (rowVP := Viewport.create)
-          return { parent with views := newPV :: rest }
-        | [] => return s
+        -- get parent's prql to build filter on original data
+        let parentPrql := match s.views.tail? with
+          | some (pv :: _) => pv.prql
+          | _ => "from df"
+        let filterPrql := s!"{parentPrql} | filter {filterExpr}"
+        let fv : View := ⟨v.path, filterPrql, s!"filter {filterExpr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, v.decimals⟩
+        return s.push fv
     | _ => return s
   -- duplicate view (T)
   else if ev.ch == chT then
