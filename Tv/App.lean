@@ -336,7 +336,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
       | some idx => return s.setCur { v with colVP := Viewport.goto idx nc }
       | none => return s
     | none => return s
-  -- filter (\) - query all distinct values
+  -- filter (\) - query all distinct values, push new view
   else if ev.ch == chBackslash then
     let col := v.colVP.cursor
     let colName := di.colNames.getD col "?"
@@ -344,10 +344,10 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
     | .ok vals =>
       match ← runFzf ["--prompt=Filter " ++ colName ++ ": "] (String.intercalate "\n" vals) with
       | some val =>
-        -- quote value in case it has spaces
         let quotedVal := "'" ++ val.replace "'" "''" ++ "'"
         let filterPrql := v.prql ++ " | filter " ++ colName ++ " == " ++ quotedVal
-        return s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create))
+        let fv : View := ⟨v.path, filterPrql, s!"filter {colName}", Viewport.create, Viewport.create, .tbl, none, [], [], none, v.decimals⟩
+        return s.push fv
       | none => return s
     | .error _ => return s
   -- select columns (s) - use input mode in test mode
