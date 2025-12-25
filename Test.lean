@@ -192,7 +192,7 @@ def test_rename_column : IO Unit := do
 def test_duplicate_view : IO Unit := do
   let output ← runKeys "T" "tests/data/basic.csv"
   let (tab, _) := footer output
-  assert (contains tab "[2]") s!"T should duplicate view (show [2]): {tab}"
+  assert (contains tab "[#2]") s!"T should duplicate view (show [#2]): {tab}"
 
 def test_toggle_key_selected_cols : IO Unit := do
   let output ← runKeys " l !" "tests/data/xkey.csv"

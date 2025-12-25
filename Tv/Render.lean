@@ -228,15 +228,26 @@ def shortenPrql (prql : String) : String :=
     else rest
   else prql
 
--- | Render tab line: path | disp1 | disp2 ... (disp or shortened prql)
-def tabLine (path : String) (disps : List (String × String)) (y : UInt32) : IO Unit := do
-  -- disps is list of (disp, prql) pairs; use disp if non-empty, else shortenPrql
-  let short := disps.map fun (d, p) => if d.isEmpty then shortenPrql p else d
-  let parts := if short.all (·.isEmpty) && disps.length > 1
-    then [s!"{path} [{disps.length}]"]  -- show count for duplicate base views
-    else (path :: short).filter (!·.isEmpty)
-  let line := String.intercalate " | " parts
-  Term.print 0 y Term.cyan Term.black line
+-- | Shorten path for display (strip source: prefix)
+def shortenPath (p : String) : String :=
+  if p.startsWith "source:" then p.drop 7 else p
+
+-- | Render tab line: view1 | view2 | ... (all views on stack)
+def tabLine (views : List (String × String × String)) (y : UInt32) : IO Unit := do
+  -- views: (path, disp, prql); head=current, tail=parents; reverse for display
+  let rev := views.reverse
+  let n := rev.length
+  -- build labels, omit path if same as previous
+  let (labels, _) := rev.foldl (init := ([], ("", 0))) fun (acc, (prevPath, idx)) (path, d, p) =>
+    let lbl := if d.isEmpty then shortenPrql p else d
+    let sp := shortenPath path
+    let txt := if path == prevPath then (if lbl.isEmpty then s!"#{idx+1}" else lbl)
+               else if lbl.isEmpty then sp else s!"{sp} {lbl}"
+    (acc ++ [txt], (path, idx + 1))
+  -- bracket current view (last after reverse)
+  let marked := (List.range n).zip labels |>.map fun (i, lbl) =>
+    if i == n - 1 then s!"[{lbl}]" else lbl
+  Term.print 0 y Term.cyan Term.black (String.intercalate " | " marked)
 
 -- | Render status bar at bottom
 def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
@@ -269,28 +280,17 @@ def keyHints : List (String × String) := [
   ("r", "ls -r"), ("q", "quit")
 ]
 
--- | Render info overlay at bottom-right (2-column layout, aligned key|hint)
+-- | Render info overlay at bottom-right (key | hint)
 def infoOverlay (_ : Table) (_ _ : Nat) (screenH screenW : Nat) : IO Unit := do
-  -- pair hints into 2-column rows
-  let nHints := keyHints.length
-  let nRows := (nHints + 1) / 2
-  let keyW := 5   -- width for key column
-  let hintW := 10 -- width for hint column
-  let colW := keyW + hintW
-  let boxW := colW * 2 + 1
-  -- position at bottom-right
+  let nRows := keyHints.length
+  let keyW := 5; let hintW := 10
+  let boxW := keyW + 1 + hintW
   let x0 := screenW - boxW - 2
   let y0 := screenH - nRows - 3
-  -- format: key right-aligned, hint left-aligned
-  let fmt := fun (k, d) =>
+  for i in [:nRows] do
+    let (k, d) := keyHints.getD i ("", "")
     let kpad := String.ofList (List.replicate (keyW - k.length) ' ') ++ k
     let dpad := d.take hintW ++ String.ofList (List.replicate (hintW - min d.length hintW) ' ')
-    kpad ++ " " ++ dpad
-  -- draw 2-column layout
-  for i in [:nRows] do
-    let left := keyHints.getD (i * 2) ("", "")
-    let right := keyHints.getD (i * 2 + 1) ("", "")
-    let line := fmt left ++ fmt right
-    Term.print x0.toUInt32 (y0 + i).toUInt32 Term.black Term.yellow line
+    Term.print x0.toUInt32 (y0 + i).toUInt32 Term.black Term.yellow (kpad ++ " " ++ dpad)
 
 end Render
