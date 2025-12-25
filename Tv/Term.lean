@@ -70,6 +70,9 @@ opaque setCell : UInt32 → UInt32 → UInt32 → UInt32 → UInt32 → IO Unit
 @[extern "lean_tb_poll_event"]
 opaque pollEvent : IO Event
 
+@[extern "lean_tb_buffer_str"]
+opaque bufferStr : IO String
+
 -- | Print string at position with colors
 def print (x y : UInt32) (fg bg : UInt32) (s : String) : IO Unit := do
   let mut cx := x

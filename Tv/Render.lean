@@ -18,8 +18,8 @@ def header (t : Table) (cols : Array ColPos) (selCol : Nat) (y : UInt32) : IO Un
     let bg := if i == selCol then Term.cyan else Term.black
     Term.printPad x.toUInt32 y w.toUInt32 fg bg col.name
 
--- | Render single data row
-def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol : Nat) (y : UInt32) : IO Unit := do
+-- | Render single data row with decimal precision
+def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat) (y : UInt32) : IO Unit := do
   let cells := t.rows.getD rowIdx #[]
   let isCurRow := rowIdx == curRow
   for (i, x, w) in cols do
@@ -29,10 +29,11 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol : Nat) (y : UInt
                     else if isCurRow then (Term.white, Term.black)
                     else if i == curCol then (Term.yellow, Term.black)
                     else (Term.white, Term.black)
+    let cellStr := cell.toStringD decimals
     if cell.isNum then
-      Term.printPadR x.toUInt32 y w.toUInt32 fg bg cell.toString
+      Term.printPadR x.toUInt32 y w.toUInt32 fg bg cellStr
     else
-      Term.printPad x.toUInt32 y w.toUInt32 fg bg cell.toString
+      Term.printPad x.toUInt32 y w.toUInt32 fg bg cellStr
 
 -- | Cumulative x positions: cumX[i] = start x of column i from offset 0
 def cumX (widths : Array Nat) : Array Nat :=
@@ -132,7 +133,7 @@ theorem prevInDisplay_toKey :
 
 -- | Render table with viewport and key columns, returns new column offset
 def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
-          (keyCols : List Nat := []) : IO Nat := do
+          (keyCols : List Nat := []) (decimals : Nat := 3) : IO Nat := do
   Term.clear
   let widths := t.colWidths
   let curRow := rowVP.cursor
@@ -171,23 +172,81 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
   -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
-    row t cols ri curRow curCol (i + 1).toUInt32
+    row t cols ri curRow curCol decimals (i + 1).toUInt32
     -- render separator for each row
     if !keyCols.isEmpty then
       Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.white Term.black "|"
   return vr.offset
 
+-- | Format number with comma separators (1000000 -> "1,000,000")
+def fmtNum (n : Nat) : String :=
+  let s := toString n
+  if s.length <= 3 then s
+  else
+    let rec go (cs : List Char) (i : Nat) : List Char :=
+      match cs with
+      | [] => []
+      | c :: rest =>
+        if i > 0 && i % 3 == 0 then ',' :: c :: go rest (i + 1)
+        else c :: go rest (i + 1)
+    (go s.toList.reverse 0).reverse |> String.ofList
+
+-- | Get memory usage in MB from /proc/self/status
+def memMB : IO Nat := do
+  try
+    let s ← IO.FS.readFile "/proc/self/status"
+    -- find "VmRSS:" line, parse kB value
+    for line in s.splitOn "\n" do
+      if line.startsWith "VmRSS:" then
+        let parts := line.splitOn " " |>.filter (!·.isEmpty)
+        if parts.length >= 2 then
+          return (parts[1]!.toNat? |>.getD 0) / 1024
+    return 0
+  catch _ => return 0
+
+-- | Shorten PRQL: "from df | freq {a} (df)" -> "freq a"
+def shortenPrql (prql : String) : String :=
+  if prql == "from df" then ""
+  else if prql.startsWith "from df | " then
+    let rest := prql.drop 10  -- drop "from df | "
+    -- simplify common patterns
+    if rest.startsWith "freq {" then
+      let col := rest.drop 6 |>.takeWhile (· != '}')
+      s!"freq {col}"
+    else if rest.startsWith "filter " then
+      s!"filter {rest.drop 7}"
+    else if rest.startsWith "sort " then
+      s!"sort {rest.drop 5}"
+    else rest
+  else prql
+
+-- | Render tab line: path | disp1 | disp2 ... (disp or shortened prql)
+def tabLine (path : String) (disps : List (String × String)) (y : UInt32) : IO Unit := do
+  -- disps is list of (disp, prql) pairs; use disp if non-empty, else shortenPrql
+  let short := disps.map fun (d, p) => if d.isEmpty then shortenPrql p else d
+  let parts := if short.all (·.isEmpty) && disps.length > 1
+    then [s!"{path} [{disps.length}]"]  -- show count for duplicate base views
+    else (path :: short).filter (!·.isEmpty)
+  let line := String.intercalate " | " parts
+  Term.print 0 y Term.cyan Term.black line
+
 -- | Render status bar at bottom
-def statusBar (path : String) (curRow nRows viewCnt : Nat)
-              (keyCols selCols : List Nat) (cols : Array Column) (y : UInt32) : IO Unit := do
-  let pos := s!"{curRow + 1}/{nRows}"
-  let viewStr := if viewCnt > 1 then s!"[{viewCnt}] " else ""
-  let keyStr := if keyCols.isEmpty then ""
-    else " !" ++ String.intercalate "," (keyCols.map fun i => (cols.getD i default).name)
-  let selStr := if selCols.isEmpty then ""
-    else " *" ++ String.intercalate "," (selCols.map fun i => (cols.getD i default).name)
-  let msg := s!"{viewStr}{path}  {pos}{keyStr}{selStr}"
-  Term.print 0 y Term.cyan Term.black msg
+def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
+              (cols : Array Column) (y : UInt32) (msg : String := "") : IO Unit := do
+  -- left side: message or key/sel columns
+  let left := if msg.isEmpty then
+    let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.length} "
+    let selStr := if selCols.isEmpty then ""
+      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun i => (cols.getD i default).name)
+    s!"{keyStr}{selStr}"
+  else msg
+  -- right side: mem + row/total
+  let mb ← memMB
+  let right := s!"{mb}MB {curRow}/{fmtNum total}"
+  -- print left, then right-aligned position
+  Term.print 0 y Term.cyan Term.black left
+  let rx := screenW - right.length
+  Term.print rx.toUInt32 y Term.cyan Term.black right
 
 -- | Render info box (centered overlay)
 def infoBox (t : Table) (col row : Nat) (screenH screenW : Nat) : IO Unit := do

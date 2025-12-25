@@ -11,6 +11,7 @@ namespace Backend
 def prqlFuncs : String := "
 let freq = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
 let cnt = func tbl <relation> -> (from tbl | aggregate {n = count this})
+let colmeta = func c tbl <relation> -> (from tbl | aggregate {cnt = s\"COUNT({c})\", dist = count_distinct c, total = count this, min = min c, max = max c})
 "
 
 -- | Theorems: freq PRQL includes required columns
@@ -137,6 +138,15 @@ def logPrql (prql : String) : IO Unit := do
   let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
   h.putStrLn s!"[prql] {prql}"
 
+-- | Log error to file (not stderr - silent is golden)
+def logError (msg : String) : IO Unit := do
+  let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
+  h.putStrLn s!"[error] {msg}"
+
+-- | INVARIANT: No IO.e* writes in Tv/*.lean
+-- | All errors go to /tmp/tv.log for silent operation
+def noStderr : Bool := true
+
 -- | Check if string contains "take "
 def hasLimit (s : String) : Bool := (s.splitOn "take ").length > 1
 
@@ -187,5 +197,42 @@ def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
       | _ => return .ok 0
     else
       return .ok 0
+
+-- | Quote column name for PRQL (backticks for special chars)
+def quoteCol (s : String) : String :=
+  if s.any (fun c => !c.isAlphanum && c != '_') then s!"`{s}`"
+  else s
+
+-- | Query column metadata (stats for all columns)
+def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
+  -- First get column names from schema
+  let schemaPrql := prql ++ " | take 1"
+  match ← query (mkLimited schemaPrql 1) path with
+  | .error e => return .error e
+  | .ok schema =>
+    let colNames := schema.cols.map (·.name)
+    if colNames.isEmpty then return .ok Table.empty
+    -- Query stats for each column
+    let mut rows : Array (Array Cell) := #[]
+    for colName in colNames do
+      let qc := quoteCol colName
+      let metaPrql := s!"{prql} | colmeta this.{qc} df"
+      match ← query (mkLimited metaPrql 1) path with
+      | .error _ => rows := rows.push #[.str colName, .null, .null, .str "?", .null, .null]
+      | .ok tbl =>
+        if tbl.nRows > 0 then
+          let cnt := tbl.get 0 0
+          let dist := tbl.get 0 1
+          let total := tbl.get 0 2
+          let minV := tbl.get 0 3
+          let maxV := tbl.get 0 4
+          let nullPct := match cnt, total with
+            | .int c, .int t => if t > 0 then s!"{(t - c) * 100 / t}%" else "0%"
+            | _, _ => "?"
+          rows := rows.push #[.str colName, cnt, dist, .str nullPct, minV, maxV]
+        else
+          rows := rows.push #[.str colName, .null, .null, .str "?", .null, .null]
+    let metaCols := #[⟨"column"⟩, ⟨"cnt"⟩, ⟨"dist"⟩, ⟨"null%"⟩, ⟨"min"⟩, ⟨"max"⟩]
+    return .ok (Table.create metaCols rows)
 
 end Backend

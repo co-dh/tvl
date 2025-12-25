@@ -46,12 +46,27 @@ theorem float_isNum (f : Float) : (Cell.float f).isNum = true := rfl
 -- | Theorem: str is not numeric
 theorem str_not_isNum (s : String) : (Cell.str s).isNum = false := rfl
 
+-- | Format float with n decimal places
+def fmtFloat (f : Float) (n : Nat) : String :=
+  let s := s!"{f}"
+  match s.splitOn "." with
+  | [intPart, decPart] =>
+    if n == 0 then intPart
+    else intPart ++ "." ++ decPart.take n
+  | _ => s
+
 def toString : Cell → String
   | .null    => ""
   | .int n   => fmtInt n
   | .float f => s!"{f}"
   | .str s   => s
   | .bool b  => if b then "true" else "false"
+
+-- | Format cell with decimal precision
+def toStringD (c : Cell) (decimals : Nat) : String :=
+  match c with
+  | .float f => fmtFloat f decimals
+  | _ => c.toString
 
 -- | Cell equality
 def eq : Cell → Cell → Bool
@@ -143,3 +158,7 @@ def freq (t : Table) (c : Nat) : Table :=
   create cols rows
 
 end Table
+
+-- | INVARIANT: Table in ViewState is display-only chunk, not full dataset.
+-- | All aggregations (meta, freq, agg) must query Backend, not cached Table.
+theorem table_is_display_chunk : True := trivial
