@@ -322,7 +322,7 @@ def s (c : KeyCtx) : KeyResult := do
       pure (c.s.setCur (c.v.copy (prql := selPrql)))
     else pure c.s
 
--- | M - meta view
+-- | M - meta view (works on any view)
 def M (c : KeyCtx) : KeyResult := do
   match ← Backend.queryMeta c.v.prql c.v.path with
   | .ok metaTbl =>
@@ -335,7 +335,7 @@ def I (c : KeyCtx) : KeyResult := do
   let iv : View := ⟨c.v.path, c.v.prql, "", Viewport.create, Viewport.create, .info c.v.colVP.cursor c.v.rowVP.cursor, c.v.cache, c.v.keyCols, c.v.selCols, c.v.total, c.v.decimals⟩
   pure (c.s.push iv)
 
--- | F - frequency view
+-- | F - frequency view (works on any view)
 def F (c : KeyCtx) : KeyResult := do
   let (cols, colStr) := if c.v.keyCols.isEmpty then
     let name := c.di.colNames.getD c.v.colVP.cursor "?"
@@ -351,44 +351,52 @@ def F (c : KeyCtx) : KeyResult := do
   let fv : View := ⟨c.v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, freqKeys, [], none, 3⟩
   pure (c.s.push fv)
 
--- | ret - enter key (context-dependent)
+-- | ret on freqV: push filtered view based on selected row
+def retFreq (c : KeyCtx) (colNames : String) : KeyResult := do
+  let cols := colNames.splitOn "," |>.map String.trim
+  match ← Backend.queryRow c.v.prql c.v.path c.v.rowVP.cursor cols.length with
+  | .error _ => pure c.s
+  | .ok vals =>
+    let filters := (List.range cols.length).zip cols |>.map fun (i, cn) =>
+      let val := vals.getD i .null
+      s!"{cn} == {cellToPrql val}"
+    let filterExpr := String.intercalate " && " filters
+    let parentPrql := match c.s.views.tail? with
+      | some (pv :: _) => pv.prql
+      | _ => "from df"
+    let filterPrql := s!"{parentPrql} | filter {filterExpr}"
+    let fv : View := ⟨c.v.path, filterPrql, s!"filter {filterExpr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
+    pure (c.s.push fv)
+
+-- | ret on folder (source:ls): enter folder or open file with bat
+def retFld (c : KeyCtx) : KeyResult := do
+  match ← Backend.queryRow c.v.prql c.v.path c.v.rowVP.cursor 9 with
+  | .error _ => pure c.s
+  | .ok vals =>
+    let perms := match vals.getD 0 .null with | .str str => str | _ => ""
+    let name := match vals.getD 8 .null with | .str str => str | _ => ""
+    if name.isEmpty then pure c.s
+    else
+      let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
+      let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
+      if perms.startsWith "d" then
+        let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+        pure (c.s.push lsv)
+      else
+        runBat fullPath
+        pure c.s
+
+-- | ret on tbl: no-op (could add row details later)
+def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
+
+-- | ret - enter key (dispatch by ViewKind)
 def ret (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
-  | .freqV colNames =>
-    -- freq view: push filtered view
-    let cols := colNames.splitOn "," |>.map String.trim
-    match ← Backend.queryRow c.v.prql c.v.path c.v.rowVP.cursor cols.length with
-    | .error _ => pure c.s
-    | .ok vals =>
-      let filters := (List.range cols.length).zip cols |>.map fun (i, cn) =>
-        let val := vals.getD i .null
-        s!"{cn} == {cellToPrql val}"
-      let filterExpr := String.intercalate " && " filters
-      let parentPrql := match c.s.views.tail? with
-        | some (pv :: _) => pv.prql
-        | _ => "from df"
-      let filterPrql := s!"{parentPrql} | filter {filterExpr}"
-      let fv : View := ⟨c.v.path, filterPrql, s!"filter {filterExpr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, c.v.decimals⟩
-      pure (c.s.push fv)
-  | _ =>
-    -- folder view: enter folder or open file
-    if c.v.path.startsWith "source:ls" then
-      match ← Backend.queryRow c.v.prql c.v.path c.v.rowVP.cursor 9 with
-      | .error _ => pure c.s
-      | .ok vals =>
-        let perms := match vals.getD 0 .null with | .str str => str | _ => ""
-        let name := match vals.getD 8 .null with | .str str => str | _ => ""
-        if name.isEmpty then pure c.s
-        else
-          let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
-          let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
-          if perms.startsWith "d" then
-            let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
-            pure (c.s.push lsv)
-          else
-            runBat fullPath
-            pure c.s
-    else pure c.s
+  | .freqV colNames => retFreq c colNames
+  | .tbl => if c.v.path.startsWith "source:ls" then retFld c else retTbl c c.s
+  | .colMeta => pure c.s  -- TODO: could set key cols from selected
+  | .fld => retFld c
+  | .info _ _ => pure c.s
 
 -- | T - duplicate view
 def T (c : KeyCtx) : KeyResult := pure c.s.dupView
