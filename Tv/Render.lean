@@ -10,6 +10,58 @@ namespace Render
 -- | Column position: (colIdx, xPos, width)
 abbrev ColPos := Nat × Nat × Nat
 
+/-! ## Pure Visibility Model -/
+
+-- | Screen context for visibility calculations
+structure ScreenCtx where
+  screenH : Nat      -- screen height
+  screenW : Nat      -- screen width
+  widths  : Array Nat -- column widths
+  nRows   : Nat      -- total rows
+  nCols   : Nat      -- total columns
+
+-- | Total width of key columns (pinned left)
+def keyColsWidth (widths : Array Nat) (keyCols : List Nat) : Nat :=
+  keyCols.foldl (fun acc i => acc + widths.getD i 10 + 1) 0
+
+-- | X position of key column at index in keyCols list
+def keyColX (widths : Array Nat) (keyCols : List Nat) (idx : Nat) : Nat :=
+  (keyCols.take idx).foldl (fun acc i => acc + widths.getD i 10 + 1) 0
+
+-- | Count visible columns from offset (how many fit on screen)
+def visColCount (widths : Array Nat) (nCols screenW offset : Nat) : Nat :=
+  let rec go (i w : Nat) : Nat :=
+    if i >= nCols then i - offset
+    else
+      let colW := widths.getD i 10 + 1
+      if w + colW > screenW then i - offset
+      else go (i + 1) (w + colW)
+  if offset >= nCols then 0 else go offset 0
+
+-- | Is cursor column visible? Check both left AND right bounds
+def colVisible (cursor : Nat) (offset : Nat) (ctx : ScreenCtx) : Bool :=
+  let visCols := visColCount ctx.widths ctx.nCols ctx.screenW offset
+  offset ≤ cursor && cursor < offset + visCols
+
+-- | Is cursor row visible?
+def rowVisibleP (cursor visRows : Nat) : Bool :=
+  let startRow := if cursor < visRows then 0 else cursor - visRows + 1
+  startRow ≤ cursor && cursor < startRow + visRows
+
+-- | Combined: cursor (row, col) is visible
+def cursorVisible (rowCur colCur colOffset : Nat) (ctx : ScreenCtx) : Bool :=
+  let visRows := ctx.screenH - 1  -- 1 row for header
+  rowVisibleP rowCur visRows && colVisible colCur colOffset ctx
+
+-- | Theorem: row is always visible when visRows > 0
+theorem rowVisibleP_always (cursor visRows : Nat) (h : visRows > 0) :
+    rowVisibleP cursor visRows = true := by
+  simp only [rowVisibleP]
+  split
+  · simp; omega
+  · simp; omega
+
+
 -- | Render header row with underline attribute (highlights selected columns)
 def header (t : Table) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
            (selCols : List Nat := []) : IO Unit := do
@@ -140,6 +192,20 @@ theorem prevInDisplay_atStart :
 theorem prevInDisplay_toKey :
     prevInDisplay [1] 3 0 = 1 := by native_decide
 
+-- | Cursor row is visible: startRow ≤ curRow < endRow
+-- Given visRows and curRow, compute visible range containing cursor
+def rowVisible (curRow visRows : Nat) : Nat × Nat :=
+  let startRow := if curRow < visRows then 0 else curRow - visRows + 1
+  (startRow, startRow + visRows)
+
+-- | Theorem: cursor row is always in visible range
+theorem cursorRowVisible (curRow visRows : Nat) (hPos : visRows > 0) :
+    let (start, end_) := rowVisible curRow visRows
+    start ≤ curRow ∧ curRow < end_ := by
+  simp [rowVisible]
+  split <;> omega
+-- Note: cursor column visibility proven by VisRange.hVis : offset ≤ cursor
+
 -- | Render table with viewport and key columns, returns (offset, cols, keyW)
 def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
           (keyCols : List Nat := []) (decimals : Nat := 3)
@@ -252,7 +318,7 @@ def tabLine (views : List (String × String × String)) (y : UInt32) (screenW : 
   Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (String.intercalate " | " marked)
 
 -- | Render status bar at bottom
-def statusBar (curRow total screenW : Nat) (keyCols selCols selRows : List Nat)
+def statusBar (curRow curCol colOff total screenW : Nat) (keyCols selCols selRows : List Nat)
               (colNames : Array String) (y : UInt32) (msg : String := "") : IO Unit := do
   -- left side: message or key/sel columns/rows
   let left := if msg.isEmpty then
@@ -262,9 +328,9 @@ def statusBar (curRow total screenW : Nat) (keyCols selCols selRows : List Nat)
     let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.length}"
     s!"{keyStr}{selStr}{rowStr}"
   else msg
-  -- right side: mem + row/total
+  -- right side: col info + mem + row/total
   let mb ← memMB
-  let right := s!"{mb}MB {curRow}/{fmtNum total}"
+  let right := s!"c{curCol}+{colOff} {mb}MB {curRow}/{fmtNum total}"
   -- print left, then right-aligned position
   Term.print 0 y Term.cyan Term.default left
   let rx := screenW - right.length

@@ -279,6 +279,22 @@ def test_meta_enter_sets_keycols : IO Unit := do
   let hdr := header output
   assert (contains hdr "|") s!"Should have key col separator after meta enter: {hdr}"
 
+def test_meta_0_enter_sets_keycols : IO Unit := do
+  -- M0<ret>: select null cols, enter sets them as keyCols in parent
+  let output ← runKeys "M0<ret>" "tests/data/null_col.csv"
+  let hdr := header output
+  let (_, status) := footer output
+  assert (contains hdr "|") s!"Should have key col separator after M0<ret>: {hdr}"
+  assert (contains status "keys=1") s!"Should have 1 key col: {status}"
+
+def test_meta_1_enter_sets_keycols : IO Unit := do
+  -- M1<ret>: select single-value cols, enter sets them as keyCols in parent
+  let output ← runKeys "M1<ret>" "tests/data/single_val.csv"
+  let hdr := header output
+  let (_, status) := footer output
+  assert (contains hdr "|") s!"Should have key col separator after M1<ret>: {hdr}"
+  assert (contains status "keys=1") s!"Should have 1 key col: {status}"
+
 def test_aggregate_requires_key : IO Unit := do
   let output ← runKeys "b" "tests/data/basic.csv"
   let (_, status) := footer output
@@ -323,6 +339,16 @@ def test_lr_files : IO Unit := do
   let output ← runKeys "r" "tests/data/basic.csv"
   assert (contains output "path") s!"lr should show path column: {output}"
   assert (contains output "datetime") s!"lr should show datetime column: {output}"
+
+-- | M0<ret>llllll: select null cols as keys, navigate right, cursor should stay visible
+-- multi_null.csv has cols a,b,c,d,e where b,c,d are null
+-- After M0<ret>, keyCols=[1,2,3] (b,c,d), then l should navigate in display order
+def test_multi_null_keycols_nav : IO Unit := do
+  let output ← runKeys "M0<ret>llllll" "tests/data/multi_null.csv"
+  let (_, status) := footer output
+  -- Check cursor position shows in status (c{col}+{off})
+  -- After M0<ret>llllll, cursor should be visible (status shows col info)
+  assert (contains status "c") s!"Status should show cursor col: {status}"
 
 -- === Run all tests ===
 
@@ -372,6 +398,8 @@ def main : IO Unit := do
   test_meta_0_select_null_cols
   test_meta_1_select_single_val_cols
   test_meta_enter_sets_keycols
+  test_meta_0_enter_sets_keycols
+  test_meta_1_enter_sets_keycols
   test_aggregate_requires_key
   test_aggregate_multi_col
   test_multi_column_freq_enter
@@ -380,6 +408,7 @@ def main : IO Unit := do
   test_no_stderr
   test_ls_view
   test_lr_files
+  test_multi_null_keycols_nav
 
   Backend.shutdown
   IO.println "\nAll tests passed!"

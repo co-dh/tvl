@@ -115,7 +115,7 @@ structure Column where
 structure Table where
   cols : Array Column
   rows : Array (Array Cell)
-  widths : Array Nat  -- cached column widths
+  widths : Array Nat  -- cached column widths (size = cols.size)
   deriving Repr
 
 namespace Table
@@ -124,12 +124,17 @@ def nCols (t : Table) : Nat := t.cols.size
 def nRows (t : Table) : Nat := t.rows.size
 
 -- | Compute column widths (max of header and data, capped at 50)
+-- Size-preserving: result.size = cols.size
 def calcWidths (cols : Array Column) (rows : Array (Array Cell)) : Array Nat :=
-  let hdrW := cols.map (·.name.length)
+  let n := cols.size
+  let hdrW := cols.map (·.name.length)  -- size = n
   let dataW := rows.foldl (init := hdrW) fun acc row =>
-    let rowW := row.map (Cell.toString ·) |>.map String.length
+    -- pad row to n columns with 0-length cells, then zipWith preserves size
+    let rowW := (Array.range n).map fun i =>
+      (row.getD i .null |> Cell.toString).length
     Array.zipWith (fun a b => max a b) acc rowW
   dataW.map (fun w => min 50 w)
+
 
 -- | Create table with cached widths
 def create (cols : Array Column) (rows : Array (Array Cell)) : Table :=

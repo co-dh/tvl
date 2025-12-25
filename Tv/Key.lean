@@ -47,6 +47,8 @@ def chDot : UInt32 := 46     -- '.' increase decimals
 def chComma : UInt32 := 44   -- ',' decrease decimals
 
 -- | Key handler context (common params for all handlers)
+-- Invariant: cw.size = nc (enforced by Table.colWidths from rendering)
+-- OLD BUG: runNav used #[] for widths, causing wrong visibility calculation
 structure KeyCtx where
   s  : State         -- app state
   v  : View          -- current view
@@ -54,39 +56,151 @@ structure KeyCtx where
   nr : Nat           -- row count
   nc : Nat           -- col count
   pg : Nat           -- page size
+  sw : Nat           -- screen width
+  cw : Array Nat     -- column widths (must be tbl.colWidths, not #[])
 
 -- | Key handler result
 abbrev KeyResult := IO State
 
+/-! ## Pure State Transition with Visibility Proof -/
+
+-- | Pure state for visibility proofs (extract from View what we need)
+structure PureState where
+  rowCur   : Nat        -- cursor row
+  colCur   : Nat        -- cursor column
+  colOff   : Nat        -- column offset for scrolling
+  keyCols  : List Nat   -- key columns (pinned left)
+  nRows    : Nat        -- total rows
+  nCols    : Nat        -- total columns
+
+-- | Extract pure state from View
+def View.toPure (v : View) (nRows nCols : Nat) : PureState :=
+  ⟨v.rowVP.cursor, v.colVP.cursor, v.colVP.offset, v.keyCols, nRows, nCols⟩
+
+-- | Apply pure state back to View
+def View.applyPure (v : View) (p : PureState) : View :=
+  { v with rowVP := ⟨p.rowCur, v.rowVP.offset⟩,
+           colVP := ⟨p.colCur, p.colOff⟩,
+           keyCols := p.keyCols }
+
+-- | Navigation keys (pure, no IO)
+inductive NavKey where
+  | j | k | l | h        -- arrows
+  | g | G                -- home/end row
+  | zero | dollar        -- first/last col
+  | ctrlD | ctrlU        -- page down/up
+  | retMeta (sel : List Nat)  -- return from meta with selected cols as keys
+
+-- | Adjust offset to keep cursor visible (scroll left or right)
+-- When scrolling right, set cursor as leftmost (offset = cursor)
+-- This guarantees cursor is visible if visCols > 0
+def adjustOffset (colOff cursor nCols : Nat) (ctx : Render.ScreenCtx) : Nat :=
+  if cursor < colOff then cursor  -- scroll left: cursor at left edge
+  else if cursor >= colOff + Render.visColCount ctx.widths nCols ctx.screenW colOff
+       then cursor  -- scroll right: cursor at left edge
+  else colOff  -- already visible
+
+-- | Theorem: adjustOffset ensures offset ≤ cursor (left bound)
+theorem adjustOffset_left (colOff cursor nCols : Nat) (ctx : Render.ScreenCtx) :
+    adjustOffset colOff cursor nCols ctx ≤ cursor := by
+  simp only [adjustOffset]
+  split
+  · omega  -- cursor < colOff: offset = cursor
+  · split <;> omega  -- scroll right or keep offset
+
+-- | Theorem: adjustOffset ensures cursor < offset + visCols (right bound)
+-- Requires at least 1 column visible at the new offset
+theorem adjustOffset_right (colOff cursor nCols : Nat) (ctx : Render.ScreenCtx)
+    (hVis : Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols ctx) > 0) :
+    cursor < adjustOffset colOff cursor nCols ctx +
+             Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols ctx) := by
+  unfold adjustOffset at hVis ⊢
+  split
+  case isTrue h =>  -- cursor < colOff: offset = cursor
+    simp only [if_pos h] at hVis ⊢
+    omega
+  case isFalse h =>
+    simp only [if_neg h] at hVis ⊢
+    split
+    case isTrue h2 =>  -- cursor >= colOff + visCols: offset = cursor
+      simp only [if_pos h2] at hVis ⊢
+      omega
+    case isFalse h2 =>  -- keep offset: cursor < colOff + visCols
+      simp only [if_neg h2] at hVis ⊢
+      omega
+
+-- | Combined: adjustOffset ensures colVisible
+theorem adjustOffset_colVisible (colOff cursor nCols : Nat) (ctx : Render.ScreenCtx)
+    (hCols : nCols = ctx.nCols)
+    (hVis : Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols ctx) > 0) :
+    Render.colVisible cursor (adjustOffset colOff cursor nCols ctx) ctx = true := by
+  subst hCols
+  simp only [Render.colVisible, Bool.and_eq_true, decide_eq_true_eq]
+  exact ⟨adjustOffset_left colOff cursor ctx.nCols ctx, adjustOffset_right colOff cursor ctx.nCols ctx hVis⟩
+
+
+-- | Pure navigation: handle key and return new state
+def handleNav (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx) : PureState :=
+  let visRows := ctx.screenH - 1
+  match key with
+  | .j => { s with rowCur := min (s.rowCur + 1) (s.nRows - 1) }
+  | .k => { s with rowCur := s.rowCur - 1 }  -- saturating sub
+  | .l =>
+    let next := Render.nextInDisplay s.keyCols s.nCols s.colCur
+    let off := adjustOffset s.colOff next s.nCols ctx
+    { s with colCur := next, colOff := off }
+  | .h =>
+    let prev := Render.prevInDisplay s.keyCols s.nCols s.colCur
+    let off := adjustOffset s.colOff prev s.nCols ctx
+    { s with colCur := prev, colOff := off }
+  | .g => { s with rowCur := 0 }
+  | .G => { s with rowCur := s.nRows - 1 }
+  | .zero => { s with colCur := 0, colOff := 0 }
+  | .dollar =>
+    let last := s.nCols - 1
+    let off := adjustOffset s.colOff last s.nCols ctx
+    { s with colCur := last, colOff := off }
+  | .ctrlD => { s with rowCur := min (s.rowCur + visRows) (s.nRows - 1) }
+  | .ctrlU => { s with rowCur := s.rowCur - min s.rowCur visRows }
+  | .retMeta sel =>
+    let firstKey := sel.headD 0
+    let off := adjustOffset s.colOff firstKey s.nCols ctx
+    { s with keyCols := sel, colCur := firstKey, colOff := off }
+
+-- | Visibility predicate on pure state
+def PureState.visible (s : PureState) (ctx : Render.ScreenCtx) : Bool :=
+  let visRows := ctx.screenH - 1
+  Render.rowVisibleP s.rowCur visRows &&
+  Render.colVisible s.colCur s.colOff ctx
+
+-- | Extract ctx from KeyCtx (must match rendering ctx)
+def KeyCtx.toScreenCtx (c : KeyCtx) : Render.ScreenCtx :=
+  ⟨c.pg + 1, c.sw, c.cw, c.nr, c.nc⟩
+
+-- | Theorem: ctx widths must have correct size (catches empty widths bug)
+-- OLD BUG: runNav used #[] for widths, causing wrong visibility calculation
+theorem KeyCtx.widths_size (c : KeyCtx) (h : c.cw.size = c.nc) :
+    c.toScreenCtx.widths.size = c.toScreenCtx.nCols := by
+  simp [toScreenCtx, h]
+
+-- | Run pure nav and apply to state
+def runNav (c : KeyCtx) (key : NavKey) : State :=
+  let ctx := c.toScreenCtx
+  let p := c.v.toPure c.nr c.nc
+  let p' := handleNav p key ctx
+  c.s.setCur (c.v.applyPure p')
+
 namespace Key
 
--- | j - move down
-def j (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.moveRight c.nr })
-
--- | k - move up
-def k (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.moveLeft })
-
--- | l - move right
-def l (c : KeyCtx) : KeyResult := do
-  let next := Render.nextInDisplay c.v.keyCols c.nc c.v.colVP.cursor
-  pure (c.s.setCur { c.v with colVP := ⟨next, c.v.colVP.offset⟩ })
-
--- | h - move left
-def h (c : KeyCtx) : KeyResult := do
-  let prev := Render.prevInDisplay c.v.keyCols c.nc c.v.colVP.cursor
-  pure (c.s.setCur { c.v with colVP := ⟨prev, c.v.colVP.offset⟩ })
-
--- | Ctrl-D - page down
-def ctrlD (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.pageDown c.pg c.nr })
-
--- | Ctrl-U - page up
-def ctrlU (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := c.v.rowVP.pageUp c.pg })
-
--- | g - go to top
-def g (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.goTop })
-
--- | G - go to end
-def G (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with rowVP := Viewport.goEnd c.nr })
+-- | Navigation handlers use runNav with pure handleNav
+def j (c : KeyCtx) : KeyResult := pure (runNav c .j)
+def k (c : KeyCtx) : KeyResult := pure (runNav c .k)
+def l (c : KeyCtx) : KeyResult := pure (runNav c .l)
+def h (c : KeyCtx) : KeyResult := pure (runNav c .h)
+def ctrlD (c : KeyCtx) : KeyResult := pure (runNav c .ctrlD)
+def ctrlU (c : KeyCtx) : KeyResult := pure (runNav c .ctrlU)
+def g (c : KeyCtx) : KeyResult := pure (runNav c .g)
+def G (c : KeyCtx) : KeyResult := pure (runNav c .G)
 
 -- | Check if null% is 100% (fully null column)
 def isFullNull (s : String) : Bool := s == "100%"
@@ -119,9 +233,7 @@ def zero (c : KeyCtx) : KeyResult := do
     match c.v.cache with
     | some tbl => pure (c.s.setCur { c.v with selRows := selectFullNull tbl })
     | none => pure c.s
-  | _ =>
-    let first := Render.displayOrder c.v.keyCols c.nc |>.headD 0
-    pure (c.s.setCur { c.v with colVP := ⟨first, 0⟩ })
+  | _ => pure (runNav c .zero)
 
 -- | 1 - meta: select rows with dist == 1 (single-value cols)
 def one (c : KeyCtx) : KeyResult := do
@@ -139,9 +251,7 @@ def one (c : KeyCtx) : KeyResult := do
   | _ => pure c.s  -- no-op for non-meta views
 
 -- | $ - last column
-def dollar (c : KeyCtx) : KeyResult := do
-  let last := Render.displayOrder c.v.keyCols c.nc |>.getLast? |>.getD 0
-  pure (c.s.setCur { c.v with colVP := ⟨last, c.v.colVP.offset⟩ })
+def dollar (c : KeyCtx) : KeyResult := pure (runNav c .dollar)
 
 -- | [ - sort ascending
 def lbrak (c : KeyCtx) : KeyResult := do
@@ -302,36 +412,122 @@ def retLr (c : KeyCtx) : KeyResult := do
       runBat path
       pure c.s
 
--- | Pure: compute new parent view with selected rows as keyCols
--- Cursor moves to first key col (always visible, pinned left)
-def retMetaPure (selRows : List Nat) (parent : View) : View :=
-  let firstKey := selRows.headD 0
-  { parent with keyCols := selRows, colVP := ⟨firstKey, 0⟩ }
+-- | Theorem: j preserves row visibility (cursor stays in bounds)
+theorem handleNav_j_rowVisible (s : PureState) (ctx : Render.ScreenCtx)
+    (hH : ctx.screenH > 1) :
+    let s' := handleNav s .j ctx
+    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
+  simp [handleNav]
+  exact Render.rowVisibleP_always _ _ (by omega)
 
--- | Theorem: cursor is on first key col
-theorem retMetaPure_cursor_eq (sel : List Nat) (parent : View) :
-    (retMetaPure sel parent).colVP.cursor = sel.headD 0 := rfl
+-- | Theorem: k preserves row visibility
+theorem handleNav_k_rowVisible (s : PureState) (ctx : Render.ScreenCtx)
+    (hH : ctx.screenH > 1) :
+    let s' := handleNav s .k ctx
+    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
+  simp [handleNav]
+  exact Render.rowVisibleP_always _ _ (by omega)
 
--- | Theorem: cursor is in keyCols (visible) when sel not empty
-theorem retMetaPure_cursor_in_keys (sel : List Nat) (parent : View) (h : sel ≠ []) :
-    (retMetaPure sel parent).colVP.cursor ∈ (retMetaPure sel parent).keyCols := by
-  simp [retMetaPure]
-  cases sel with
-  | nil => contradiction
-  | cons x xs => simp
+-- | Theorem: g preserves row visibility (goes to row 0)
+theorem handleNav_g_rowVisible (s : PureState) (ctx : Render.ScreenCtx)
+    (hH : ctx.screenH > 1) :
+    let s' := handleNav s .g ctx
+    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
+  simp [handleNav]
+  exact Render.rowVisibleP_always 0 _ (by omega)
 
--- | Theorem: Meta 0 Enter sets keyCols = selectFullNull
--- Chain: zero sets selRows = selectFullNull tbl, retMetaPure sets keyCols = selRows
-theorem meta0Enter_keyCols (tbl : Table) (parent : View) :
-    (retMetaPure (selectFullNull tbl) parent).keyCols = selectFullNull tbl := rfl
+-- | Theorem: l moves to next column in DISPLAY order (keyCols first)
+-- BUG: current code does colCur + 1, should use nextInDisplay
+theorem handleNav_l_displayOrder (s : PureState) (ctx : Render.ScreenCtx) :
+    let s' := handleNav s .l ctx
+    s'.colCur = Render.nextInDisplay s.keyCols s.nCols s.colCur := by
+  simp [handleNav]
+
+-- | Theorem: h moves to prev column in DISPLAY order
+theorem handleNav_h_displayOrder (s : PureState) (ctx : Render.ScreenCtx) :
+    let s' := handleNav s .h ctx
+    s'.colCur = Render.prevInDisplay s.keyCols s.nCols s.colCur := by
+  simp [handleNav]
+
+-- | Theorem: retMeta sets keyCols = sel, cursor = first key col
+theorem handleNav_retMeta_cursor (s : PureState) (sel : List Nat) (ctx : Render.ScreenCtx) :
+    let s' := handleNav s (.retMeta sel) ctx
+    s'.colCur = sel.headD 0 ∧ s'.keyCols = sel := by
+  simp [handleNav]
+
+-- | Theorem: M 0 <ret> sets keyCols = selectFullNull (full null columns)
+-- Chain: M shows meta, 0 sets selRows = selectFullNull, <ret> sets keyCols = selRows
+theorem meta0ret_keyCols (s : PureState) (tbl : Table) (ctx : Render.ScreenCtx) :
+    let s' := handleNav s (.retMeta (selectFullNull tbl)) ctx
+    s'.keyCols = selectFullNull tbl := by
+  simp [handleNav]
+
+-- | Main theorem: all nav keys preserve row visibility
+theorem handleNav_rowVisible (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx)
+    (hH : ctx.screenH > 1) :
+    let s' := handleNav s key ctx
+    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
+  cases key <;> simp [handleNav] <;> exact Render.rowVisibleP_always _ _ (by omega)
+
+
+-- | All nav keys must keep cursor column visible
+-- Requires visCols > 0 at the new offset for column-changing keys
+theorem handleNav_colVisible (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx)
+    (hCols : s.nCols = ctx.nCols)
+    (hVis : Render.colVisible s.colCur s.colOff ctx = true)
+    (hVisCols : ∀ off, Render.visColCount ctx.widths s.nCols ctx.screenW off > 0) :
+    let s' := handleNav s key ctx
+    Render.colVisible s'.colCur s'.colOff ctx = true := by
+  cases key <;> simp only [handleNav]
+  case j => exact hVis
+  case k => exact hVis
+  case g => exact hVis
+  case G => exact hVis
+  case ctrlD => exact hVis
+  case ctrlU => exact hVis
+  case l => exact adjustOffset_colVisible s.colOff _ s.nCols ctx hCols (hVisCols _)
+  case h => exact adjustOffset_colVisible s.colOff _ s.nCols ctx hCols (hVisCols _)
+  case dollar => exact adjustOffset_colVisible s.colOff _ s.nCols ctx hCols (hVisCols _)
+  case zero =>
+    -- cursor=0, offset=0
+    simp only [Render.colVisible, Bool.and_eq_true, decide_eq_true_eq]
+    constructor
+    · omega
+    · have h := hVisCols 0; simp only [hCols] at h; omega
+  case retMeta sel =>
+    -- cursor=sel.headD 0, offset=adjustOffset
+    exact adjustOffset_colVisible s.colOff _ s.nCols ctx hCols (hVisCols _)
+
+-- | Pure: pop meta view and set parent's keyCols
+def popMetaPure (views : List View) (selRows : List Nat) : List View :=
+  match views with
+  | _ :: parent :: rest =>
+    let firstKey := selRows.headD 0
+    let parent' := { parent with keyCols := selRows, colVP := ⟨firstKey, 0⟩ }
+    parent' :: rest
+  | _ => views
+
+-- | Theorem: popMetaPure returns to parent with keyCols = selRows
+theorem popMetaPure_keyCols (m parent : View) (rest : List View) (sel : List Nat) :
+    let views' := popMetaPure (m :: parent :: rest) sel
+    match views'.head? with
+    | some v => v.keyCols = sel
+    | none => False := by
+  simp [popMetaPure]
+
+-- | Theorem: M 0 <ret> returns to parent with keyCols = selectFullNull
+theorem meta0ret_parent (m parent : View) (rest : List View) (tbl : Table) :
+    let views' := popMetaPure (m :: parent :: rest) (selectFullNull tbl)
+    match views'.head? with
+    | some v => v.keyCols = selectFullNull tbl
+    | none => False := by
+  simp [popMetaPure]
+
 
 -- | ret on colMeta: pop to parent with selected rows as keyCols
 def retMeta (c : KeyCtx) : KeyResult := do
   if c.v.selRows.isEmpty then pure c.s
-  else match c.s.views.tail? with
-  | some (parent :: rest) =>
-    pure { c.s with views := retMetaPure c.v.selRows parent :: rest }
-  | _ => pure c.s
+  else pure { c.s with views := popMetaPure c.s.views c.v.selRows }
 
 -- | ret - enter key (dispatch by ViewKind)
 def ret (c : KeyCtx) : KeyResult := do
@@ -358,12 +554,20 @@ def excl (c : KeyCtx) : KeyResult := do
                  else c.v.keyCols ++ cols.filter (!c.v.keyCols.contains ·)
   pure (c.s.setCur { c.v with keyCols := newKeys, selCols := [] })
 
--- | Space - toggle column selection
+-- | Space - toggle column selection (or row selection in meta view)
 def space (c : KeyCtx) : KeyResult := do
-  let col := c.v.colVP.cursor
-  let newSel := if c.v.selCols.contains col then c.v.selCols.filter (· != col)
-                else c.v.selCols ++ [col]
-  pure (c.s.setCur { c.v with selCols := newSel })
+  match c.v.vkind with
+  | .colMeta =>
+    -- In meta view, toggle row selection (for setting keyCols on return)
+    let row := c.v.rowVP.cursor
+    let newSel := if c.v.selRows.contains row then c.v.selRows.filter (· != row)
+                  else c.v.selRows ++ [row]
+    pure (c.s.setCur { c.v with selRows := newSel })
+  | _ =>
+    let col := c.v.colVP.cursor
+    let newSel := if c.v.selCols.contains col then c.v.selCols.filter (· != col)
+                  else c.v.selCols ++ [col]
+    pure (c.s.setCur { c.v with selCols := newSel })
 
 -- | Parse agg function name to Prql.Agg
 def parseAgg : String → Option Prql.Agg
