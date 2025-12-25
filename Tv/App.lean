@@ -129,9 +129,9 @@ partial def loop (s : State) : IO Unit := do
   let (off, cols, keyW) ← Render.table tbl v'.rowVP v'.colVP (h.toNat - 3) w.toNat v'.keyCols v'.decimals v'.selCols
   -- draw header again above tab line
   Render.header tbl cols v'.colVP.cursor (h - 3) v'.selCols
-  if !v'.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.white Term.black "|"
+  if !v'.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.default Term.default "|"
   let views := s.views.map fun v => (v.path, v.disp, v.prql)
-  Render.tabLine views (h - 2)
+  Render.tabLine views (h - 2) w.toNat
   Render.statusBar v'.rowVP.cursor (v'.total.getD di.nRows) w.toNat
                    v'.keyCols v'.selCols di.colNames (h - 1) s.msg
   if s.showInfo then Render.infoOverlay tbl v'.colVP.cursor v'.rowVP.cursor h.toNat w.toNat

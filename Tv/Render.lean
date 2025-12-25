@@ -233,7 +233,7 @@ def shortenPath (p : String) : String :=
   if p.startsWith "source:" then p.drop 7 else p
 
 -- | Render tab line: view1 | view2 | ... (all views on stack)
-def tabLine (views : List (String × String × String)) (y : UInt32) : IO Unit := do
+def tabLine (views : List (String × String × String)) (y : UInt32) (screenW : Nat) : IO Unit := do
   -- views: (path, disp, prql); head=current, tail=parents; reverse for display
   let rev := views.reverse
   let n := rev.length
@@ -247,7 +247,7 @@ def tabLine (views : List (String × String × String)) (y : UInt32) : IO Unit :
   -- bracket current view (last after reverse)
   let marked := (List.range n).zip labels |>.map fun (i, lbl) =>
     if i == n - 1 then s!"[{lbl}]" else lbl
-  Term.print 0 y Term.white Term.blue (String.intercalate " | " marked)
+  Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (String.intercalate " | " marked)
 
 -- | Render status bar at bottom
 def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
