@@ -336,18 +336,17 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
       | some idx => return s.setCur { v with colVP := Viewport.goto idx nc }
       | none => return s
     | none => return s
-  -- filter (\)
+  -- filter (\) - query all distinct values
   else if ev.ch == chBackslash then
     let col := v.colVP.cursor
     let colName := di.colNames.getD col "?"
-    -- get distinct values for current column
-    let distinctPrql := v.prql ++ " | select {" ++ colName ++ "} | group {" ++ colName ++ "} (take 1)"
-    match ← Backend.query (Backend.mkLimited distinctPrql 1000) v.path with
-    | .ok valTbl =>
-      let vals := (List.range valTbl.nRows).map (fun r => toString (valTbl.get r 0)) |> String.intercalate "\n"
-      match ← runFzf ["--prompt=Filter " ++ colName ++ ": "] vals with
+    match ← Backend.queryDistinct v.prql v.path colName with
+    | .ok vals =>
+      match ← runFzf ["--prompt=Filter " ++ colName ++ ": "] (String.intercalate "\n" vals) with
       | some val =>
-        let filterPrql := v.prql ++ " | filter " ++ colName ++ " == " ++ val
+        -- quote value in case it has spaces
+        let quotedVal := "'" ++ val.replace "'" "''" ++ "'"
+        let filterPrql := v.prql ++ " | filter " ++ colName ++ " == " ++ quotedVal
         return s.setCur (v.copy (prql := filterPrql) (rowVP := Viewport.create))
       | none => return s
     | .error _ => return s

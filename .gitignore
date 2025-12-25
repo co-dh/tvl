@@ -6,3 +6,4 @@ lake-packages/
 *.o
 *.a
 /tv
+tmp/

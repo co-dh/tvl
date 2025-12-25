@@ -210,6 +210,22 @@ def queryRow (prql : String) (path : String) (row : Nat) (ncols : Nat) : IO (Exc
     else
       return .ok []
 
+-- | Query all distinct values for a column (for fzf picker)
+-- | No limit - distinct values bounded by column cardinality
+def queryDistinct (prql : String) (path : String) (col : String) : IO (Except String (List String)) := do
+  let distinctPrql := prql ++ " | select {" ++ col ++ "} | group {" ++ col ++ "} (take 1)"
+  logPrql distinctPrql
+  if isSource path then createSource path
+  match ← compilePrql distinctPrql with
+  | .error e => return .error e
+  | .ok sql =>
+    let sql := replaceDf sql (fileExpr path)
+    try
+      let tbl ← execSql sql
+      return .ok ((List.range tbl.nRows).map fun r => toString (tbl.get r 0))
+    catch e =>
+      return .error s!"SQL error: {e}"
+
 -- | Quote column name for PRQL (backticks for special chars)
 def quoteCol (s : String) : String :=
   if s.any (fun c => !c.isAlphanum && c != '_') then s!"`{s}`"
