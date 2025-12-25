@@ -97,17 +97,23 @@ def dollar (c : KeyCtx) : KeyResult := do
   let last := Render.displayOrder c.v.keyCols c.nc |>.getLast? |>.getD 0
   pure (c.s.setCur { c.v with colVP := ⟨last, c.v.colVP.offset⟩ })
 
--- | [ - sort ascending
+-- | [ - sort ascending (no-op for meta view)
 def lbrak (c : KeyCtx) : KeyResult := do
-  let col := c.di.colNames.getD c.v.colVP.cursor "?"
-  let prql := (Prql.Query.parse c.v.prql).sortAsc col |>.render
-  pure (c.s.setCur (c.v.copy (prql := prql)))
+  match c.v.vkind with
+  | .colMeta => pure c.s  -- meta view can't be sorted via PRQL
+  | _ =>
+    let col := c.di.colNames.getD c.v.colVP.cursor "?"
+    let prql := (Prql.Query.parse c.v.prql).sortAsc col |>.render
+    pure (c.s.setCur (c.v.copy (prql := prql)))
 
--- | ] - sort descending
+-- | ] - sort descending (no-op for meta view)
 def rbrak (c : KeyCtx) : KeyResult := do
-  let col := c.di.colNames.getD c.v.colVP.cursor "?"
-  let prql := (Prql.Query.parse c.v.prql).sortDesc col |>.render
-  pure (c.s.setCur (c.v.copy (prql := prql)))
+  match c.v.vkind with
+  | .colMeta => pure c.s  -- meta view can't be sorted via PRQL
+  | _ =>
+    let col := c.di.colNames.getD c.v.colVP.cursor "?"
+    let prql := (Prql.Query.parse c.v.prql).sortDesc col |>.render
+    pure (c.s.setCur (c.v.copy (prql := prql)))
 
 -- | D - delete column(s)
 def D (c : KeyCtx) : KeyResult := do
