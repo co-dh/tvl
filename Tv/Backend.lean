@@ -57,9 +57,11 @@ def createSource (path : String) : IO Unit := do
     | "env" => ("env", #[], "name,value")
     | "df" => ("df", #["-h"], "filesystem,size,used,avail,pct,mount")
     | s => if s.startsWith "ls:" then ("ls", #["-la", s.drop 3], "permissions,links,owner,grp,size,mon,day,time,name")
+           else if s.startsWith "lr:" then ("find", #[s.drop 3, "-type", "f"], "path")
            else ("echo", #["unknown source"], "line")
   let out ← IO.Process.output { cmd := cmd, args := args }
-  let lines := out.stdout.splitOn "\n" |>.filter (!·.isEmpty) |>.drop 1  -- skip header
+  let hasHeader := cmd == "ls" || cmd == "ps" || cmd == "df"
+  let lines := out.stdout.splitOn "\n" |>.filter (!·.isEmpty) |> (if hasHeader then (·.drop 1) else id)
   if lines.isEmpty then return ()
   -- Build INSERT statements
   let colList := cols.splitOn ","

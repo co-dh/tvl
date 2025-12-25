@@ -10,22 +10,29 @@ namespace Render
 -- | Column position: (colIdx, xPos, width)
 abbrev ColPos := Nat × Nat × Nat
 
--- | Render header row with underline attribute
-def header (t : Table) (cols : Array ColPos) (selCol : Nat) (y : UInt32) : IO Unit := do
+-- | Render header row with underline attribute (highlights selected columns)
+def header (t : Table) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
+           (selCols : List Nat := []) : IO Unit := do
   for (i, x, w) in cols do
     let col := t.cols.getD i default
-    let fg := if i == selCol then Term.black else Term.cyan ||| Term.underline
-    let bg := if i == selCol then Term.cyan else Term.black
+    let isSel := selCols.contains i
+    let (fg, bg) := if i == selCol then (Term.black, Term.cyan)
+                    else if isSel then (Term.black, Term.magenta)
+                    else (Term.cyan ||| Term.underline, Term.black)
     Term.printPad x.toUInt32 y w.toUInt32 fg bg col.name
 
--- | Render single data row with decimal precision
-def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat) (y : UInt32) : IO Unit := do
+-- | Render single data row with decimal precision (highlights selected columns)
+def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
+        (y : UInt32) (selCols : List Nat := []) : IO Unit := do
   let cells := t.rows.getD rowIdx #[]
   let isCurRow := rowIdx == curRow
   for (i, x, w) in cols do
     let cell := cells.getD i .null
     let isCursor := isCurRow && i == curCol
+    let isSel := selCols.contains i
     let (fg, bg) := if isCursor then (Term.black, Term.white)
+                    else if isSel && isCurRow then (Term.black, Term.magenta)
+                    else if isSel then (Term.magenta, Term.black)
                     else if isCurRow then (Term.white, Term.black)
                     else if i == curCol then (Term.yellow, Term.black)
                     else (Term.white, Term.black)
@@ -131,9 +138,10 @@ theorem prevInDisplay_atStart :
 theorem prevInDisplay_toKey :
     prevInDisplay [1] 3 0 = 1 := by native_decide
 
--- | Render table with viewport and key columns, returns new column offset
+-- | Render table with viewport and key columns, returns (offset, cols, keyW)
 def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
-          (keyCols : List Nat := []) (decimals : Nat := 3) : IO Nat := do
+          (keyCols : List Nat := []) (decimals : Nat := 3)
+          (selCols : List Nat := []) : IO (Nat × Array ColPos × Nat) := do
   Term.clear
   let widths := t.colWidths
   let curRow := rowVP.cursor
@@ -165,18 +173,18 @@ def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
   let endRow := min t.nRows (startRow + visRows)
   -- render header
-  header t cols curCol 0
+  header t cols curCol 0 selCols
   -- render separator in header
   if !keyCols.isEmpty then
     Term.print (keyW).toUInt32 0 Term.white Term.black "|"
   -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
-    row t cols ri curRow curCol decimals (i + 1).toUInt32
+    row t cols ri curRow curCol decimals (i + 1).toUInt32 selCols
     -- render separator for each row
     if !keyCols.isEmpty then
       Term.print (keyW).toUInt32 (i + 1).toUInt32 Term.white Term.black "|"
-  return vr.offset
+  return (vr.offset, cols, keyW)
 
 -- | Format number with comma separators (1000000 -> "1,000,000")
 def fmtNum (n : Nat) : String :=
@@ -248,33 +256,41 @@ def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
   let rx := screenW - right.length
   Term.print rx.toUInt32 y Term.cyan Term.black right
 
--- | Render info box (centered overlay)
-def infoBox (t : Table) (col row : Nat) (screenH screenW : Nat) : IO Unit := do
-  Term.clear
-  let colName := t.cols.getD col default |>.name
-  let cell := t.get row col
-  let cellStr := cell.toString
-  let cellLen := cellStr.length
-  -- box content
-  let lines := #[
-    s!"Column: {colName}",
-    s!"Row: {row + 1}/{t.nRows}",
-    s!"Value: {cellStr}",
-    s!"Length: {cellLen}",
-    s!"Type: {match cell with | .null => "null" | .int _ => "int" | .float _ => "float" | .str _ => "str" | .bool _ => "bool"}"
-  ]
-  let boxW := lines.foldl (fun m l => max m l.length) 20
-  let boxH := lines.size + 2
-  let x0 := (screenW - boxW - 4) / 2
-  let y0 := (screenH - boxH) / 2
-  -- draw box
-  Term.print x0.toUInt32 y0.toUInt32 Term.white Term.blue (String.ofList (List.replicate (boxW + 4) ' '))
-  for i in [:lines.size] do
-    let line := lines.getD i ""
-    let padded := line ++ String.ofList (List.replicate (boxW - line.length) ' ')
-    Term.print x0.toUInt32 (y0 + i + 1).toUInt32 Term.white Term.blue s!"  {padded}  "
-  Term.print x0.toUInt32 (y0 + boxH - 1).toUInt32 Term.white Term.blue (String.ofList (List.replicate (boxW + 4) ' '))
-  Term.print x0.toUInt32 (y0 + boxH).toUInt32 Term.cyan Term.black "Press q or Esc to close"
-  Term.present
+-- | Key bindings for info overlay (2 columns: key | hint)
+def keyHints : List (String × String) := [
+  ("j/k", "up/down"), ("h/l", "left/right"),
+  ("g/G", "top/end"), ("^D/^U", "page"),
+  ("0/$", "first/last"), ("[/]", "sort"),
+  ("\\", "filter"), ("F", "freq"),
+  ("M", "meta"), ("D", "delete"),
+  ("s", "select"), ("!", "key col"),
+  ("b", "agg"), ("T", "dup"),
+  ("S", "swap"), (":", "cmd"),
+  ("r", "ls -r"), ("q", "quit")
+]
+
+-- | Render info overlay at bottom-right (2-column layout, aligned key|hint)
+def infoOverlay (_ : Table) (_ _ : Nat) (screenH screenW : Nat) : IO Unit := do
+  -- pair hints into 2-column rows
+  let nHints := keyHints.length
+  let nRows := (nHints + 1) / 2
+  let keyW := 5   -- width for key column
+  let hintW := 10 -- width for hint column
+  let colW := keyW + hintW
+  let boxW := colW * 2 + 1
+  -- position at bottom-right
+  let x0 := screenW - boxW - 2
+  let y0 := screenH - nRows - 3
+  -- format: key right-aligned, hint left-aligned
+  let fmt := fun (k, d) =>
+    let kpad := String.ofList (List.replicate (keyW - k.length) ' ') ++ k
+    let dpad := d.take hintW ++ String.ofList (List.replicate (hintW - min d.length hintW) ' ')
+    kpad ++ " " ++ dpad
+  -- draw 2-column layout
+  for i in [:nRows] do
+    let left := keyHints.getD (i * 2) ("", "")
+    let right := keyHints.getD (i * 2 + 1) ("", "")
+    let line := fmt left ++ fmt right
+    Term.print x0.toUInt32 (y0 + i).toUInt32 Term.black Term.yellow line
 
 end Render
