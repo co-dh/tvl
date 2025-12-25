@@ -247,7 +247,7 @@ def tabLine (views : List (String × String × String)) (y : UInt32) : IO Unit :
   -- bracket current view (last after reverse)
   let marked := (List.range n).zip labels |>.map fun (i, lbl) =>
     if i == n - 1 then s!"[{lbl}]" else lbl
-  Term.print 0 y Term.cyan Term.black (String.intercalate " | " marked)
+  Term.print 0 y Term.white Term.blue (String.intercalate " | " marked)
 
 -- | Render status bar at bottom
 def statusBar (curRow total screenW : Nat) (keyCols selCols : List Nat)
@@ -277,7 +277,7 @@ def keyHints : List (String × String) := [
   ("s", "select"), ("!", "key col"),
   ("b", "agg"), ("T", "dup"),
   ("S", "swap"), (":", "cmd"),
-  ("r", "ls -r"), ("q", "quit")
+  ("r", "lr"), ("q", "quit")
 ]
 
 -- | Render info overlay at bottom-right (key | hint)
