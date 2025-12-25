@@ -172,4 +172,4 @@ def Table.info (t : Table) : DisplayInfo :=
 
 -- | INVARIANT: handleKey receives DisplayInfo, not Table.
 -- | This makes it impossible to access cell data outside rendering.
-theorem display_info_no_cells : True := trivial
+-- | Enforcement: handleKey signature takes DisplayInfo, not Table.

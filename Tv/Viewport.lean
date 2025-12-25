@@ -62,4 +62,36 @@ theorem moveRight_end (v : Viewport) (maxIdx : Nat) (h : v.cursor + 1 ≥ maxIdx
   have : v.cursor ≥ maxIdx - 1 := by omega
   simp [this]
 
+-- | Theorem: left key decrements cursor (when not at start)
+theorem moveLeft_dec (v : Viewport) (h : v.cursor > 0) :
+    (v.moveLeft).cursor = v.cursor - 1 := by
+  unfold moveLeft
+  simp [Nat.ne_of_gt h]
+
+-- | Theorem: left key stays at start
+theorem moveLeft_start (v : Viewport) (h : v.cursor = 0) :
+    (v.moveLeft).cursor = 0 := by
+  unfold moveLeft
+  simp [h]
+
+-- | Theorem: pageDown cursor bounded by maxIdx - 1
+theorem pageDown_bound (v : Viewport) (n maxIdx : Nat) (h : maxIdx > 0) :
+    (v.pageDown n maxIdx).cursor < maxIdx := by
+  unfold pageDown
+  simp only [Nat.min_def]
+  split <;> (split <;> omega)
+
+-- | Theorem: pageUp cursor bounded (never exceeds original)
+theorem pageUp_bound (v : Viewport) (n : Nat) :
+    (v.pageUp n).cursor ≤ v.cursor := by
+  unfold pageUp
+  exact Nat.sub_le v.cursor (min v.cursor n)
+
+-- | Theorem: goto cursor bounded by maxIdx
+theorem goto_bound (pos maxIdx : Nat) (h : maxIdx > 0) :
+    (goto pos maxIdx).cursor < maxIdx := by
+  unfold goto
+  simp only [Nat.min_def]
+  split <;> (split <;> omega)
+
 end Viewport

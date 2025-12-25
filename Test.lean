@@ -291,6 +291,20 @@ def test_no_stderr : IO Unit := do
   let out ← IO.Process.output { cmd := "grep", args := #["-r", "eprintln", "Tv/"] }
   assert (out.stdout.trim.isEmpty) s!"Found stderr writes in Tv/: {out.stdout}"
 
+-- | 'r' key shows ls view with path
+def test_ls_view : IO Unit := do
+  let output ← runKeys "r" "tests/data/basic.csv"
+  let (tab, _) := footer output
+  assert (contains tab "ls ./") s!"r should show 'ls ./' in tab: {tab}"
+
+-- | Enter on folder in ls view enters subfolder
+def test_ls_enter_folder : IO Unit := do
+  -- Navigate to Tv folder (row 9) and press Enter
+  let output ← runKeys "rjjjjjjjjj<ret>" "tests/data/basic.csv"
+  let (tab, _) := footer output
+  -- Should show "ls Tv" in tab after entering Tv folder
+  assert (contains tab "ls Tv") s!"Enter on folder should enter it: {tab}"
+
 -- === Run all tests ===
 
 def main : IO Unit := do
@@ -342,6 +356,8 @@ def main : IO Unit := do
   test_lr_paths
   test_numeric_right_align
   test_no_stderr
+  test_ls_view
+  test_ls_enter_folder
 
   Backend.shutdown
   IO.println "\nAll tests passed!"

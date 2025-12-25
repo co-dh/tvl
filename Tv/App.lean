@@ -178,6 +178,17 @@ def runFzf (opts : List String) (input : String) : IO (Option String) := do
   let result := out.trim
   return if result.isEmpty then none else some result
 
+-- | Run bat to display file (suspends terminal)
+def runBat (path : String) : IO Unit := do
+  Term.shutdown
+  let _ ← IO.Process.spawn {
+    cmd := "bat"
+    args := #["--paging=always", path]
+    stdin := .inherit
+    stdout := .inherit
+  } >>= (·.wait)
+  let _ ← Term.init
+
 -- | Run fzf multi-select
 def runFzfMulti (opts : List String) (input : String) : IO (List String) := do
   Term.shutdown
@@ -396,6 +407,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
     let fv : View := ⟨v.path, freqPrql, s!"freq {colStr}", Viewport.create, Viewport.create, .freqV colStr, none, freqKeys, [], none, 3⟩
     return s.push fv
   -- enter: in freq view, push filtered view (keeps freq in stack)
+  -- enter: in folder view (source:ls), open file with bat or enter folder
   else if ev.key == Term.keyEnter || ev.ch == 13 then
     match v.vkind with
     | .freqV colNames =>
@@ -415,7 +427,30 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
         let filterPrql := s!"{parentPrql} | filter {filterExpr}"
         let fv : View := ⟨v.path, filterPrql, s!"filter {filterExpr}", Viewport.create, Viewport.create, .tbl, none, [], [], none, v.decimals⟩
         return s.push fv
-    | _ => return s
+    | _ =>
+      -- folder view: source:ls or source:ls:/path
+      if v.path.startsWith "source:ls" then
+        let selRow := v.rowVP.cursor
+        -- query row: col 0 = permissions, col 8 = name
+        match ← Backend.queryRow v.prql v.path selRow 9 with
+        | .error _ => return s
+        | .ok vals =>
+          let perms := match vals.getD 0 .null with | .str s => s | _ => ""
+          let name := match vals.getD 8 .null with | .str s => s | _ => ""
+          if name.isEmpty then return s
+          -- get base dir from path
+          let baseDir := if v.path == "source:ls" then "."
+                         else v.path.drop 10  -- drop "source:ls:"
+          let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
+          if perms.startsWith "d" then
+            -- directory: push new ls view
+            let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+            return s.push lsv
+          else
+            -- file: open with bat
+            runBat fullPath
+            return s
+      else return s
   -- duplicate view (T)
   else if ev.ch == chT then
     return s.dupView
@@ -483,7 +518,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH : Nat) :
     | none => return s
   -- list directory (r)
   else if ev.ch == chR then
-    let rv : View := ⟨"source:ls", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
+    let rv : View := ⟨"source:ls", "from df", "ls ./", Viewport.create, Viewport.create, .tbl, none, [], [], none, 3⟩
     return s.push rv
   -- quit/pop: pop view or quit if at root
   else if ev.ch == chQ then
