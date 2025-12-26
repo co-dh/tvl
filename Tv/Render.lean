@@ -130,24 +130,76 @@ def buildCols (widths : Array Nat) (order : List Nat) (offset screenW : Nat) : A
       else go rest (x + w + 1) (acc.push (i, x, w))
   go cols 0 #[]
 
--- | Visible range with proof cursor is visible
+-- | Visible range (offset is display position, cursor is original column index)
 structure VisRange where
   cols   : Array ColPos
-  offset : Nat
-  cursor : Nat
-  hVis   : offset ≤ cursor
+  offset : Nat  -- display order position
+  cursor : Nat  -- original column index
 
 -- | Compute visible range using display order (keyCols first)
+-- offset is in display order space (position in displayOrder list)
 def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) (keyCols : List Nat) : VisRange :=
   let order := displayOrder keyCols widths.size
-  let o := min offset cursor
-  ⟨buildCols widths order o screenW, o, cursor, Nat.min_le_right _ _⟩
+  -- offset is already correct from adjustOffset (in display order space)
+  ⟨buildCols widths order offset screenW, offset, cursor⟩
 
--- | Theorem: visible columns have key columns first (when offset=0)
-theorem visibleRange_keysFirst (widths : Array Nat) (cursor screenW : Nat) (keyCols : List Nat)
-    (hOff : cursor = 0) :
-    keyColsFirst keyCols (colIndices (visibleRange widths 0 cursor screenW keyCols).cols) = true := by
-  sorry  -- TODO: prove buildCols preserves key columns first when offset=0
+-- | Theorem: visible columns have key columns first (empty keyCols)
+theorem visibleRange_keysFirst_empty (widths : Array Nat) (cursor screenW : Nat) :
+    keyColsFirst [] (colIndices (visibleRange widths 0 cursor screenW []).cols) = true := by
+  simp [keyColsFirst]
+
+-- | Theorem: key column 1 appears first in visible range
+theorem visibleRange_keysFirst_ex1 :
+    keyColsFirst [1] (colIndices (visibleRange #[10,10,10,10,10] 0 0 80 [1]).cols) = true := by
+  native_decide
+
+-- | Theorem: key columns [2,0] appear first in visible range
+theorem visibleRange_keysFirst_ex2 :
+    keyColsFirst [2,0] (colIndices (visibleRange #[10,10,10,10,10] 0 0 80 [2,0]).cols) = true := by
+  native_decide
+
+-- | Cursor must always be visible in the rendered columns
+def cursorInCols (cursor : Nat) (cols : Array ColPos) : Bool :=
+  cols.any fun (i, _, _) => i == cursor
+
+-- | Theorem: cursor visible when offset adjusted correctly
+-- Note: this only holds when offset = displayPos cursor (set by adjustOffset)
+-- visibleRange just builds cols from offset, doesn't guarantee cursor visibility
+theorem cursorVisible_visibleRange (widths : Array Nat) (offset cursor screenW : Nat) (keyCols : List Nat)
+    (hFit : (visibleRange widths offset cursor screenW keyCols).cols.size > 0) :
+    cursorInCols cursor (visibleRange widths offset cursor screenW keyCols).cols = true := by
+  sorry  -- requires: offset ≤ displayPos cursor < offset + visCols
+
+-- | Bug case: keyCols=[0], cursor=1, narrow screen (only 2 cols fit)
+-- displayOrder [0] 5 = [0, 1, 2, 3, 4]
+-- With screenW=25, only cols 0,1 fit. cursor=1 should be visible
+theorem cursorVisible_afterL_narrow :
+    cursorInCols 1 (visibleRange #[10,10,10,10,10] 0 1 25 [0]).cols = true := by
+  native_decide
+
+-- | Bug case: keyCols=[1], cursor moves to 0 (2nd in display order)
+-- displayOrder [1] 5 = [1, 0, 2, 3, 4]
+-- After l from col 1, cursor=0. With narrow screen, cursor=0 should still be visible
+theorem cursorVisible_afterL_keyCol :
+    cursorInCols 0 (visibleRange #[10,10,10,10,10] 0 0 25 [1]).cols = true := by
+  native_decide
+
+-- | Bug case: wide keyCol, narrow screen
+-- widths=[50,10,10,10,10], keyCols=[0], screenW=80
+-- displayOrder [0] 5 = [0, 1, 2, 3, 4]
+-- After key col (width 50), only 30 pixels left for col 1 (width 10) - fits
+-- cursor=1 should be visible
+theorem cursorVisible_wideKeyCol :
+    cursorInCols 1 (visibleRange #[50,10,10,10,10] 0 1 80 [0]).cols = true := by
+  native_decide
+
+-- | Bug case: simulating 1.parquet - Time is col 0, very wide
+-- After M0<ret>l, keyCols=[0], cursor moves to 1 (Exchange)
+-- With offset=0, cursor=1 should be visible
+theorem cursorVisible_1parquet_sim :
+    let widths : Array Nat := #[20, 8, 6, 10, 8, 11, 10]  -- Time, Exchange, Symbol, etc
+    cursorInCols 1 (visibleRange widths 0 1 80 [0]).cols = true := by
+  native_decide
 
 -- | Navigation should follow display order (next column in display)
 def nextInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=

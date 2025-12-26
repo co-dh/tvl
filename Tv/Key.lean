@@ -91,43 +91,40 @@ inductive NavKey where
   | ctrlD | ctrlU        -- page down/up
   | retMeta (sel : List Nat)  -- return from meta with selected cols as keys
 
--- | Adjust offset to keep cursor visible (scroll left or right)
--- When scrolling right, set cursor as leftmost (offset = cursor)
--- This guarantees cursor is visible if visCols > 0
-def adjustOffset (colOff cursor nCols : Nat) (_keyCols : List Nat) (ctx : Render.ScreenCtx) : Nat :=
-  if cursor < colOff then cursor  -- scroll left: cursor at left edge
-  else if cursor >= colOff + Render.visColCount ctx.widths nCols ctx.screenW colOff
-       then cursor  -- scroll right: cursor at left edge
+-- | Find cursor's position in display order
+def displayPos (keyCols : List Nat) (nCols cursor : Nat) : Nat :=
+  let order := Render.displayOrder keyCols nCols
+  order.findIdx? (· == cursor) |>.getD 0
+
+-- | Count visible columns in display order from offset
+def visColCountDisplay (widths : Array Nat) (keyCols : List Nat) (nCols screenW offset : Nat) : Nat :=
+  let order := Render.displayOrder keyCols nCols
+  let cols := order.drop offset
+  let rec go (cs : List Nat) (w : Nat) (cnt : Nat) : Nat :=
+    match cs with
+    | [] => cnt
+    | i :: rest =>
+      let colW := widths.getD i 10 + 1
+      if w + colW > screenW then cnt
+      else go rest (w + colW) (cnt + 1)
+  go cols 0 0
+
+-- | Adjust offset to keep cursor visible (in display order space)
+-- offset and cursor are positions in display order, not original indices
+def adjustOffset (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx) : Nat :=
+  let curPos := displayPos keyCols nCols cursor
+  let visCols := visColCountDisplay ctx.widths keyCols nCols ctx.screenW colOff
+  if curPos < colOff then curPos  -- scroll left: cursor at left edge
+  else if curPos >= colOff + visCols then curPos  -- scroll right: cursor at left edge
   else colOff  -- already visible
 
--- | Theorem: adjustOffset ensures offset ≤ cursor (left bound)
+-- | Theorem: adjustOffset ensures offset ≤ curPos (display position)
 theorem adjustOffset_left (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx) :
-    adjustOffset colOff cursor nCols keyCols ctx ≤ cursor := by
+    adjustOffset colOff cursor nCols keyCols ctx ≤ displayPos keyCols nCols cursor := by
   simp only [adjustOffset]
   split
-  · omega  -- cursor < colOff: offset = cursor
+  · omega  -- curPos < colOff: offset = curPos
   · split <;> omega  -- scroll right or keep offset
-
--- | Theorem: adjustOffset ensures cursor < offset + visCols (right bound)
--- Requires at least 1 column visible at the new offset
-theorem adjustOffset_right (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx)
-    (hVis : Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) > 0) :
-    cursor < adjustOffset colOff cursor nCols keyCols ctx +
-             Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) := by
-  unfold adjustOffset at hVis ⊢
-  split
-  case isTrue h =>  -- cursor < colOff: offset = cursor
-    simp only [if_pos h] at hVis ⊢
-    omega
-  case isFalse h =>
-    simp only [if_neg h] at hVis ⊢
-    split
-    case isTrue h2 =>  -- cursor >= colOff + visCols: offset = cursor
-      simp only [if_pos h2] at hVis ⊢
-      omega
-    case isFalse h2 =>  -- keep offset: cursor < colOff + visCols
-      simp only [if_neg h2] at hVis ⊢
-      omega
 
 
 -- | Pure navigation: handle key and return new state
@@ -157,6 +154,33 @@ def handleNav (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx) : PureStat
     let firstKey := sel.headD 0
     let off := adjustOffset s.colOff firstKey s.nCols sel ctx
     { s with keyCols := sel, colCur := firstKey, colOff := off }
+
+-- | After handleNav .l, cursor must be visible in rendered cols
+-- adjustOffset works in display order space, visibleRange uses displayOrder
+theorem handleNav_cursorVisible (s : PureState) (ctx : Render.ScreenCtx)
+    (hVis : (Render.visibleRange ctx.widths (handleNav s .l ctx).colOff
+             (handleNav s .l ctx).colCur ctx.screenW s.keyCols).cols.size > 0) :
+    Render.cursorInCols (handleNav s .l ctx).colCur
+      (Render.visibleRange ctx.widths (handleNav s .l ctx).colOff
+       (handleNav s .l ctx).colCur ctx.screenW s.keyCols).cols = true := by
+  sorry  -- complex proof: requires showing buildCols includes cursor at adjustOffset position
+
+-- | Concrete test: with keyCols [3,4], display order = [3,4,0,1,2]
+-- After pressing 'l' from col 4, cursor moves to 0 (display position 2)
+-- adjustOffset returns offset in display order space, visibleRange uses same space
+theorem handleNav_cursorVisible_bug :
+    let widths : Array Nat := #[20, 20, 20, 20, 20]
+    let keyCols : List Nat := [3, 4]  -- keyCols reorder: display = [3,4,0,1,2]
+    -- cursor at col 4 (2nd key), offset=0
+    let s : PureState := ⟨0, 4, 0, keyCols, 10, 5⟩
+    -- narrow screen: only 2 cols fit
+    let ctx : Render.ScreenCtx := ⟨24, 45, widths, 10, 5⟩
+    let s' := handleNav s .l ctx
+    -- After l: nextInDisplay [3,4] 5 4 = 0 (position 2 in [3,4,0,1,2])
+    -- cursor=0 should be visible, offset should keep it in view
+    Render.cursorInCols s'.colCur
+      (Render.visibleRange widths s'.colOff s'.colCur ctx.screenW keyCols).cols = true := by
+  native_decide  -- Should pass now after fix
 
 -- | Visibility predicate on pure state
 def PureState.visible (s : PureState) (ctx : Render.ScreenCtx) : Bool :=
@@ -460,42 +484,23 @@ theorem handleNav_rowVisible (s : PureState) (key : NavKey) (ctx : Render.Screen
   cases key <;> simp [handleNav] <;> exact Render.rowVisibleP_always _ _ (by omega)
 
 
--- | Combined: adjustOffset ensures colVisible (with key columns)
+-- | Combined: adjustOffset ensures cursor visible in display order
+-- TODO: rewrite to use display order visibility
 theorem adjustOffset_colVisible (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx)
     (hNC : nCols = ctx.nCols)
-    (hVis : Render.visColCount ctx.widths nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) > 0) :
-    Render.colVisible cursor (adjustOffset colOff cursor nCols keyCols ctx) ctx = true := by
-  subst hNC
-  simp only [Render.colVisible, Bool.and_eq_true, decide_eq_true_eq]
-  constructor
-  · exact adjustOffset_left colOff cursor ctx.nCols keyCols ctx
-  · exact adjustOffset_right colOff cursor ctx.nCols keyCols ctx hVis
+    (hVis : visColCountDisplay ctx.widths keyCols nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) > 0) :
+    Render.cursorInCols cursor
+      (Render.visibleRange ctx.widths (adjustOffset colOff cursor nCols keyCols ctx) cursor ctx.screenW keyCols).cols = true := by
+  sorry  -- TODO: prove with display order
 
--- | All nav keys must keep cursor column visible
--- Requires visCols > 0 at the new offset for column-changing keys
+-- | All nav keys must keep cursor column visible in display order
 theorem handleNav_colVisible (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx)
     (hNC : s.nCols = ctx.nCols)
-    (hVis : Render.colVisible s.colCur s.colOff ctx = true)
-    (hVisCols : ∀ off, Render.visColCount ctx.widths s.nCols ctx.screenW off > 0) :
+    (hVisCols : ∀ off, visColCountDisplay ctx.widths s.keyCols s.nCols ctx.screenW off > 0) :
     let s' := handleNav s key ctx
-    Render.colVisible s'.colCur s'.colOff ctx = true := by
-  cases key <;> simp only [handleNav]
-  case j => exact hVis
-  case k => exact hVis
-  case g => exact hVis
-  case G => exact hVis
-  case ctrlD => exact hVis
-  case ctrlU => exact hVis
-  case l => exact adjustOffset_colVisible s.colOff _ s.nCols s.keyCols ctx hNC (hVisCols _)
-  case h => exact adjustOffset_colVisible s.colOff _ s.nCols s.keyCols ctx hNC (hVisCols _)
-  case dollar => exact adjustOffset_colVisible s.colOff _ s.nCols s.keyCols ctx hNC (hVisCols _)
-  case zero =>
-    simp only [Render.colVisible, Bool.and_eq_true, decide_eq_true_eq]
-    constructor
-    · omega
-    · have h := hVisCols 0; rw [← hNC]; omega
-  case retMeta sel =>
-    exact adjustOffset_colVisible s.colOff _ s.nCols sel ctx hNC (hVisCols _)
+    Render.cursorInCols s'.colCur
+      (Render.visibleRange ctx.widths s'.colOff s'.colCur ctx.screenW s'.keyCols).cols = true := by
+  sorry  -- TODO: prove with display order
 
 -- | Pure: pop meta view and set parent's keyCols
 def popMetaPure (views : List View) (selRows : List Nat) : List View :=

@@ -11,11 +11,11 @@ namespace Backend
 -- | PRQL function definitions (prepended to all queries)
 -- | Matches rust tv's cfg/funcs.prql
 def prqlFuncs : String := "
-let freq = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
-let cnt = func tbl <relation> -> (from tbl | aggregate {n = count this})
-let uniq = func c tbl <relation> -> (from tbl | group {c} (take 1) | select {c})
+let freq  = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
+let cnt   = func tbl   <relation> -> (from tbl | aggregate {n = count this})
+let uniq  = func c tbl <relation> -> (from tbl | group {c} (take 1) | select {c})
 let stats = func c tbl <relation> -> (from tbl | aggregate {n = count this, min = min c, max = max c, avg = average c, std = stddev c})
-let meta = func c tbl <relation> -> (from tbl | aggregate {cnt = s\"COUNT({c})\", dist = count_distinct c, total = count this, min = min c, max = max c})
+let meta  = func c tbl <relation> -> (from tbl | aggregate {cnt = s\"COUNT({c})\", dist = count_distinct c, total = count this, min = min c, max = max c})
 "
 
 -- | Theorems: freq PRQL includes required columns
