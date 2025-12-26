@@ -88,10 +88,6 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
     else
       Term.printPad x.toUInt32 y w.toUInt32 fg bg cellStr
 
--- | Cumulative x positions: cumX[i] = start x of column i from offset 0
-def cumX (widths : Array Nat) : Array Nat :=
-  widths.foldl (init := #[0]) fun acc w => acc.push (acc.back! + w + 1)
-
 -- | Key columns come first in display order
 def keyColsFirst (keyCols : List Nat) (allCols : List Nat) : Bool :=
   allCols.take keyCols.length == keyCols
@@ -200,6 +196,37 @@ theorem cursorVisible_1parquet_sim :
     let widths : Array Nat := #[20, 8, 6, 10, 8, 11, 10]  -- Time, Exchange, Symbol, etc
     cursorInCols 1 (visibleRange widths 0 1 80 [0]).cols = true := by
   native_decide
+
+-- | Theorem: buildCols preserves correct widths from widths array
+-- Each ColPos (i, x, w) should have w = widths[i]
+def colWidthsCorrect (widths : Array Nat) (cols : Array ColPos) : Bool :=
+  cols.all fun (i, _, w) => w == widths.getD i 10
+
+-- | Test: widths preserved with no keyCols
+theorem buildCols_widthsCorrect_noKeys :
+    let widths := #[20, 8, 6, 10, 8, 11, 10]
+    let cols := buildCols widths [0,1,2,3,4,5,6] 0 80
+    colWidthsCorrect widths cols = true := by native_decide
+
+-- | Test: widths preserved with keyCols (display order changes)
+theorem buildCols_widthsCorrect_keyCols :
+    let widths := #[20, 8, 6, 10, 8, 11, 10]
+    let keyCols := [3, 4]  -- display order = [3,4,0,1,2,5,6]
+    let cols := buildCols widths (displayOrder keyCols 7) 0 80
+    colWidthsCorrect widths cols = true := by native_decide
+
+-- | After delete, keyCols with index >= deleted must be decremented
+-- Example: keyCols=[10], delete col 5 -> keyCols should become [9]
+def adjustKeyCols (keyCols : List Nat) (delCol : Nat) : List Nat :=
+  keyCols.filterMap fun k =>
+    if k == delCol then none  -- deleted column removed from keyCols
+    else if k > delCol then some (k - 1)  -- indices after deleted shift down
+    else some k  -- indices before deleted unchanged
+
+-- | Concrete test: adjustKeyCols works
+theorem adjustKeyCols_ex1 : adjustKeyCols [10] 5 = [9] := by native_decide
+theorem adjustKeyCols_ex2 : adjustKeyCols [3, 10] 5 = [3, 9] := by native_decide
+theorem adjustKeyCols_ex3 : adjustKeyCols [5, 10] 5 = [9] := by native_decide  -- 5 deleted
 
 -- | Navigation should follow display order (next column in display)
 def nextInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=

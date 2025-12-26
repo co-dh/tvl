@@ -305,8 +305,21 @@ def D (c : KeyCtx) : KeyResult := do
     let prevDel := if c.v.disp.startsWith "del " then c.v.disp.drop 4 else ""
     let delStr := String.intercalate "," delNames
     let newDisp := if prevDel.isEmpty then s!"del {delStr}" else s!"del {prevDel},{delStr}"
-    let newColVP := if c.v.colVP.cursor ≥ c.nc - delCols.length then c.v.colVP.moveLeft else c.v.colVP
-    let v' := { c.v.copy (prql := prql) with disp := newDisp, colVP := newColVP, selCols := [] }
+    -- Adjust cursor: shift down for each deleted col before it
+    let sortedDel := delCols.toArray.qsort (· > ·) |>.toList
+    let newCursor := sortedDel.foldl (fun cur d =>
+      if d < cur then cur - 1
+      else if d == cur then min (cur - 1) (c.nc - delCols.length - 1)  -- deleted cursor col
+      else cur) c.v.colVP.cursor
+    let newCursor := max 0 (min newCursor (keepCols.length - 1))
+    -- Adjust keyCols: remove deleted cols, shift indices down
+    let newKeyCols := sortedDel.foldl (fun ks d => Render.adjustKeyCols ks d) c.v.keyCols
+    -- Adjust offset: shift down for each deleted col before it
+    let newOffset := sortedDel.foldl (fun off d =>
+      if d < off then off - 1 else off) c.v.colVP.offset
+    let newOffset := min newOffset (keepCols.length - 1)
+    let newColVP := ⟨newCursor, newOffset⟩
+    let v' := { c.v.copy (prql := prql) with disp := newDisp, colVP := newColVP, selCols := [], keyCols := newKeyCols }
     pure (c.s.setCur v'.invalidate)
   else pure c.s
 

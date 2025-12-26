@@ -111,11 +111,6 @@ def View.invalidate (v : View) : View := { v with cache := none }
 def View.copy (v : View) (prql : String := v.prql) (rowVP : Viewport := v.rowVP) : View :=
   { v with prql := prql, rowVP := rowVP, cache := none, total := none }
 
--- | Quote column name for PRQL (use this. prefix for stdlib conflicts)
-def quoteName (s : String) : String :=
-  let reserved := ["count", "sum", "avg", "min", "max", "average", "group", "sort", "filter", "select", "derive", "from", "take", "date", "time"]
-  if reserved.contains s then s!"this.{s}" else s
-
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String
   | .null => "null"

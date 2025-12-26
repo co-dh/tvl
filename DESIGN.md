@@ -2,10 +2,11 @@
 
 ## Goal
 
-Reimplement tv (CSV browser) in Lean 4 with:
-- Dependent types for cursor visibility (not refinement types)
+Reimplement tv (CSV/Parquet browser) in Lean 4 with:
+- Theorems for cursor visibility invariants
 - FFI to termbox2 for TUI
-- FFI to DuckDB for queries (future)
+- FFI to DuckDB via ADBC for queries
+- PRQL for query composition
 
 ## Architecture
 
@@ -17,69 +18,78 @@ Reimplement tv (CSV browser) in Lean 4 with:
                        │
 ┌──────────────────────▼──────────────────────────────┐
 │                     App.lean                         │
-│  ┌───────────────────────────────────────────────┐  │
-│  │ AppState                                       │  │
-│  │  ├── table : Table n m  (n rows, m cols)      │  │
-│  │  ├── rowVP : Viewport   (cursor visible)      │  │
-│  │  ├── colVP : Viewport   (cursor visible)      │  │
-│  │  └── msg : String                             │  │
-│  └───────────────────────────────────────────────┘  │
-│                                                      │
-│  loop: poll → handle → render                        │
-└──────┬─────────────────────┬────────────────────────┘
-       │                     │
-       ▼                     ▼
-┌─────────────┐       ┌─────────────┐
-│  Term.lean  │       │ Table.lean  │
-│  (termbox2) │       │ (data)      │
-└─────────────┘       └─────────────┘
+│  loop: poll → Key.handle → Render.table              │
+└──────┬───────────────┬──────────────────────────────┘
+       │               │
+       ▼               ▼
+┌─────────────┐ ┌─────────────────────────────────────┐
+│  Key.lean   │ │            State.lean                │
+│  handlers   │ │  ┌─────────────────────────────┐    │
+│  h,j,k,l,   │ │  │ State                       │    │
+│  M,D,F,...  │ │  │  ├── views : List View      │    │
+└──────┬──────┘ │  │  ├── showInfo : Bool        │    │
+       │        │  │  └── msg : String           │    │
+       │        │  └─────────────────────────────┘    │
+       │        │  ┌─────────────────────────────┐    │
+       │        │  │ View                        │    │
+       │        │  │  ├── path, prql, disp       │    │
+       │        │  │  ├── rowVP, colVP : Viewport│    │
+       │        │  │  ├── keyCols, selCols/Rows  │    │
+       │        │  │  └── cache : Option Table   │    │
+       │        │  └─────────────────────────────┘    │
+       │        └─────────────────────────────────────┘
+       ▼
+┌─────────────────────────────────────────────────────┐
+│                   Backend.lean                       │
+│  ┌───────────┐  ┌───────────┐  ┌─────────────────┐  │
+│  │ Prql.lean │→ │ prqlc CLI │→ │   Adbc.lean     │  │
+│  │ type-safe │  │ PRQL→SQL  │  │ DuckDB via FFI  │  │
+│  └───────────┘  └───────────┘  └─────────────────┘  │
+│  + meta cache (.tv.meta files)                       │
+└─────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────┐
+│                   Render.lean                        │
+│  displayOrder → visibleRange → header/row            │
+│  keyCols first, then rest in original order          │
+└──────┬──────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│  Term.lean  │  │ Types.lean  │  │ Fzf.lean    │
+│  termbox2   │  │ Cell,Table  │  │ picker/bat  │
+└─────────────┘  └─────────────┘  └─────────────┘
 ```
 
 ## Core Types
 
-### Viewport (cursor always visible)
+### Viewport (cursor + offset)
 
 ```lean
 structure Viewport where
-  cursor : Nat
-  offset : Nat
-  size   : Nat
-  hpos   : size > 0
-  hvis   : offset ≤ cursor ∧ cursor < offset + size
+  cursor : Nat  -- current position
+  offset : Nat  -- scroll offset
   deriving Repr
-
-def mkViewport (sz : Nat) (h : sz > 0) : Viewport :=
-  ⟨0, 0, sz, h, ⟨Nat.zero_le 0, h⟩⟩
 
 def Viewport.moveRight (v : Viewport) : Viewport :=
-  if h : v.cursor + 1 < v.offset + v.size then
-    { v with cursor := v.cursor + 1, hvis := ⟨v.hvis.1, h⟩ }
-  else
-    { v with
-      cursor := v.cursor + 1,
-      offset := v.offset + 1,
-      hvis := ⟨Nat.le_succ_of_le v.hvis.1, by omega⟩ }
+  ⟨v.cursor + 1, v.offset⟩
 
 def Viewport.moveLeft (v : Viewport) : Viewport :=
-  if v.cursor = 0 then v
-  else if h : v.cursor > v.offset then
-    { v with cursor := v.cursor - 1, hvis := ⟨by omega, by omega⟩ }
-  else
-    { v with cursor := v.cursor - 1, offset := v.cursor - 1,
-      hvis := ⟨Nat.le_refl _, by omega⟩ }
+  ⟨v.cursor - 1, v.offset⟩  -- saturating sub
 ```
 
-### Table (sized)
+### Table (with cached widths)
 
 ```lean
-structure Table (rows cols : Nat) where
-  headers : Vector String cols
-  data    : Vector (Vector String cols) rows
+structure Table where
+  cols   : Array Column
+  rows   : Array (Array Cell)
+  widths : Array Nat  -- cached column widths (max of header/data)
   deriving Repr
 
-def Table.delCol (t : Table r c) (idx : Fin c) (h : c > 1) : Table r (c - 1) :=
-  { headers := t.headers.eraseIdx idx
-  , data := t.data.map (·.eraseIdx idx) }
+def Table.create (cols : Array Column) (rows : Array (Array Cell)) : Table :=
+  ⟨cols, rows, calcWidths cols rows⟩
 ```
 
 ### Cell Types
@@ -92,6 +102,21 @@ inductive Cell where
   | str (v : String)
   | bool (v : Bool)
   deriving Repr
+```
+
+### Display Order (key columns first)
+
+```lean
+-- keyCols appear first, then rest in original order
+def displayOrder (keyCols : List Nat) (nCols : Nat) : List Nat :=
+  keyCols ++ (List.range nCols).filter (!keyCols.contains ·)
+
+-- Adjust keyCols after column delete
+def adjustKeyCols (keyCols : List Nat) (delCol : Nat) : List Nat :=
+  keyCols.filterMap fun k =>
+    if k == delCol then none
+    else if k > delCol then some (k - 1)
+    else some k
 ```
 
 ## FFI Bindings
@@ -151,15 +176,21 @@ lean/
 ├── lakefile.lean      # build config
 ├── Main.lean          # entry point
 ├── Tv/
-│   ├── Types.lean     # Cell, basic types
-│   ├── Viewport.lean  # cursor visibility proof
-│   ├── Table.lean     # sized table
-│   ├── Term.lean      # termbox2 FFI
-│   ├── Csv.lean       # CSV parser
-│   ├── Render.lean    # table rendering
-│   └── App.lean       # event loop, state
+│   ├── Types.lean     # Cell, Column, Table with cached widths
+│   ├── Viewport.lean  # cursor + offset scroll state
+│   ├── State.lean     # View, ViewKind, State
+│   ├── Term.lean      # termbox2 FFI bindings
+│   ├── Adbc.lean      # DuckDB ADBC FFI bindings
+│   ├── Backend.lean   # PRQL compile, query exec, meta cache
+│   ├── Prql.lean      # type-safe PRQL builder
+│   ├── Render.lean    # displayOrder, visibleRange, table render
+│   ├── Key.lean       # all key handlers (h,j,k,l,M,D,F,...)
+│   ├── Fzf.lean       # fzf picker, bat viewer integration
+│   ├── Csv.lean       # simple CSV parser (fallback)
+│   └── App.lean       # event loop
 └── c/
-    └── term_shim.c    # C FFI shim
+    ├── term_shim.c    # termbox2 C shim
+    └── adbc_shim.c    # DuckDB ADBC C shim
 ```
 
 ## Build
@@ -168,17 +199,21 @@ lean/
 lake build
 ```
 
-## Implementation Order
+## Implementation Status
 
-1. [ ] Project setup (lakefile.lean)
-2. [ ] Viewport with proofs
-3. [ ] termbox2 FFI bindings
-4. [ ] Basic render loop (hello world)
-5. [ ] Table type (sized vectors)
-6. [ ] CSV parser
-7. [ ] Table rendering
-8. [ ] Cursor movement with bounds
-9. [ ] Delete column
+1. [x] Project setup (lakefile.lean)
+2. [x] Viewport (cursor + offset)
+3. [x] termbox2 FFI bindings
+4. [x] DuckDB ADBC FFI bindings
+5. [x] PRQL type-safe builder
+6. [x] Table type with cached widths
+7. [x] CSV parser (fallback)
+8. [x] Table rendering with displayOrder
+9. [x] Key columns (M view, select, return)
+10. [x] Cursor visibility theorems
+11. [x] Meta view cache (.tv.meta files)
+12. [x] Column delete with keyCols adjustment
+13. [ ] General visibility theorem proofs (sorry)
 
 ## Key Differences from Haskell
 

@@ -140,6 +140,18 @@ def calcWidths (cols : Array Column) (rows : Array (Array Cell)) : Array Nat :=
 def create (cols : Array Column) (rows : Array (Array Cell)) : Table :=
   ⟨cols, rows, calcWidths cols rows⟩
 
+-- | Theorem: widths cover header names (width >= min 50 name.length)
+def widthsValid (cols : Array Column) (widths : Array Nat) : Bool :=
+  cols.size == widths.size &&
+  (Array.range cols.size).all fun i =>
+    widths.getD i 0 >= min 50 (cols.getD i default).name.length
+
+-- | Concrete test: calcWidths produces valid widths
+theorem calcWidths_valid_ex1 :
+    let cols := #[⟨"Name"⟩, ⟨"LongerColumnName"⟩, ⟨"X"⟩]
+    let rows := #[#[Cell.str "A", Cell.str "B", Cell.str "C"]]
+    widthsValid cols (calcWidths cols rows) = true := by native_decide
+
 def empty : Table := ⟨#[], #[], #[]⟩
 
 -- | Get cell at (row, col), default to null

@@ -212,10 +212,6 @@ def logError (msg : String) : IO Unit := do
   let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
   h.putStrLn s!"[{ts}] [error] {msg}"
 
--- | INVARIANT: No IO.e* writes in Tv/*.lean
--- | All errors go to /tmp/tv.log for silent operation
-def noStderr : Bool := true
-
 -- | Check if string contains "take "
 def hasLimit (s : String) : Bool := (s.splitOn "take ").length > 1
 
@@ -248,11 +244,6 @@ def mkLimited (prql : String) (n : Nat) : LimitedQuery :=
 
 -- | Theorem: example shows mkLimited has limit
 theorem mkLimited_example : hasLimit "from df | take 1000" = true := by native_decide
-
--- | Execute PRQL with chunk (for viewport rendering)
-def queryChunk (prql : String) (path : String) (offset limit : Nat) : IO (Except String Table) := do
-  -- Note: PRQL doesn't have offset, so we take more and skip in Lean
-  query (mkLimited prql (offset + limit)) path
 
 -- | Get total row count for PRQL query
 def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
@@ -294,11 +285,6 @@ def queryDistinct (prql : String) (path : String) (col : String) : IO (Except St
       return .ok ((List.range tbl.nRows).map fun r => toString (tbl.get r 0))
     catch e =>
       return .error s!"SQL error: {e}"
-
--- | Quote column name for PRQL (backticks for special chars)
-def quoteCol (s : String) : String :=
-  if s.any (fun c => !c.isAlphanum && c != '_') then s!"`{s}`"
-  else s
 
 -- | Map Arrow format char to type name
 def fmtToType : Char → String
