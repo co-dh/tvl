@@ -1,11 +1,24 @@
 /-
-  State types: View, ViewKind, InputMode, State
+  State types: NavState, View, ViewKind, InputMode, State
 -/
 import Tv.Types
-import Tv.Viewport
 import Tv.Backend
 
 namespace App
+
+-- | Core navigation state (cursor + offset for row/col, key columns)
+structure NavState where
+  rowCur  : Nat := 0       -- row cursor
+  rowOff  : Nat := 0       -- row offset (first visible)
+  colCur  : Nat := 0       -- column cursor
+  colOff  : Nat := 0       -- column offset (first visible in display order)
+  keyCols : List Nat := [] -- key columns (pinned left)
+  deriving Repr
+
+namespace NavState
+def create : NavState := ⟨0, 0, 0, 0, []⟩
+def goto (col nCols : Nat) : NavState := ⟨0, 0, min col (nCols - 1), 0, []⟩
+end NavState
 
 -- | View kind: how to render/interact
 inductive ViewKind where
@@ -17,18 +30,16 @@ inductive ViewKind where
 
 -- | Single view with PRQL query
 structure View where
-  path   : String        -- file path
-  prql   : String        -- PRQL query (from df | ...)
-  disp   : String := ""  -- display name for tab (if different from prql)
-  rowVP  : Viewport
-  colVP  : Viewport
-  vkind  : ViewKind := .tbl
-  cache  : Option Table := none  -- cached result
-  keyCols : List Nat := []       -- key columns for aggregate/pivot
-  selCols : List Nat := []       -- selected columns for aggregate
-  selRows : List Nat := []       -- selected rows (for meta view)
-  total  : Option Nat := none    -- total row count (from cnt query)
-  decimals : Nat := 3            -- decimal precision for floats
+  path    : String         -- file path
+  prql    : String         -- PRQL query (from df | ...)
+  disp    : String := ""   -- display name for tab
+  nav     : NavState := NavState.create
+  vkind   : ViewKind := .tbl
+  cache   : Option Table := none
+  selCols : List Nat := []
+  selRows : List Nat := []
+  total   : Option Nat := none
+  decimals : Nat := 3
 
 -- | Pending input for interactive commands
 inductive InputMode where
@@ -51,7 +62,7 @@ structure State where
   showInfo : Bool := false        -- show info overlay (toggle with I)
 
 -- | Default empty view
-def View.empty : View := ⟨"", "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
+def View.empty : View := ⟨"", "from df", "", NavState.create, .tbl, none, [], [], none, 3⟩
 
 -- | Current view
 def State.cur (s : State) : View := s.views.headD View.empty
@@ -107,9 +118,9 @@ def View.fetch (v : View) : IO (View × Table) := do
 -- | Invalidate cache (after PRQL change)
 def View.invalidate (v : View) : View := { v with cache := none }
 
--- | View.copy helper for updating PRQL and resetting viewport/cache/total
-def View.copy (v : View) (prql : String := v.prql) (rowVP : Viewport := v.rowVP) : View :=
-  { v with prql := prql, rowVP := rowVP, cache := none, total := none }
+-- | View.copy helper for updating PRQL and resetting cache/total
+def View.copy (v : View) (prql : String := v.prql) (nav : NavState := v.nav) : View :=
+  { v with prql := prql, nav := nav, cache := none, total := none }
 
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String

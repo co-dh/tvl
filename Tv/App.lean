@@ -2,7 +2,6 @@
   Application event loop
 -/
 import Tv.Types
-import Tv.Viewport
 import Tv.Term
 import Tv.Render
 import Tv.Backend
@@ -29,7 +28,7 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let newName := s.inputBuf.trim
       if !newName.isEmpty then
-        let oldName := di.colNames.getD v.colVP.cursor "?"
+        let oldName := di.colNames.getD v.nav.colCur "?"
         let newCols := di.colNames.toList.map fun n => if n == oldName then newName else n
         let q := Prql.Query.parse v.prql
         let prql := q.derive1 newName (Prql.quote oldName) |>.select newCols |>.render
@@ -42,7 +41,7 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       let expr := s.inputBuf.trim
       if !expr.isEmpty then
         let prql := (Prql.Query.parse v.prql).filter expr |>.render
-        return some { s.setCur (v.copy (prql := prql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
+        return some { s.setCur (v.copy (prql := prql) (nav := NavState.create)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -52,16 +51,17 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       if cmd.startsWith "freq " then
         let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim
         let prql := (Prql.Query.parse v.prql).freqFull cols |>.render
-        let fv : View := ⟨v.path, prql, s!"freq {String.intercalate "," cols}", Viewport.create, Viewport.create, .freqV (String.intercalate "," cols), none, List.range cols.length, [], [], none, 3⟩
+        let nav := { NavState.create with keyCols := List.range cols.length }
+        let fv : View := ⟨v.path, prql, s!"freq {String.intercalate "," cols}", nav, .freqV (String.intercalate "," cols), none, [], [], none, 3⟩
         return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
-        let lrv : View := ⟨s!"source:lr:{dir}", "from df", s!"lr {dir}", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
+        let lrv : View := ⟨s!"source:lr:{dir}", "from df", s!"lr {dir}", NavState.create, .tbl, none, [], [], none, 3⟩
         return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
         let prql := (Prql.Query.parse v.prql).filter expr |>.render
-        return some { s.setCur (v.copy (prql := prql) (rowVP := Viewport.create)) with inputMode := .none, inputBuf := "" }
+        return some { s.setCur (v.copy (prql := prql) (nav := NavState.create)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "", msg := s!"unknown: {cmd}" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -127,18 +127,18 @@ partial def loop (s : State) : IO Unit := do
   let w ← Term.width
   let h ← Term.height
   -- render table and overlays (h-3 for data, h-3 for header, h-2 for tab, h-1 for status)
-  let (off, cols, keyW) ← Render.table tbl v'.rowVP v'.colVP (h.toNat - 3) w.toNat v'.keyCols v'.decimals v'.selCols v'.selRows
+  let (off, cols, keyW) ← Render.table tbl v'.nav (h.toNat - 3) w.toNat v'.decimals v'.selCols v'.selRows
   -- draw header again above tab line
-  Render.header tbl cols v'.colVP.cursor (h - 3) v'.selCols
-  if !v'.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.default Term.default "|"
+  Render.header tbl cols v'.nav.colCur (h - 3) v'.selCols
+  if !v'.nav.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.default Term.default "|"
   let views := s.views.map fun v => (v.path, v.disp, v.prql)
   Render.tabLine views (h - 2) w.toNat
-  Render.statusBar v'.rowVP.cursor v'.colVP.cursor v'.colVP.offset (v'.total.getD di.nRows) w.toNat
-                   v'.keyCols v'.selCols v'.selRows di.colNames (h - 1) s.msg
-  if s.showInfo then Render.infoOverlay tbl v'.colVP.cursor v'.rowVP.cursor h.toNat w.toNat
+  Render.statusBar v'.nav.rowCur v'.nav.colCur v'.nav.colOff (v'.total.getD di.nRows) w.toNat
+                   v'.nav.keyCols v'.selCols v'.selRows di.colNames (h - 1) s.msg
+  if s.showInfo then Render.infoOverlay tbl v'.nav.colCur v'.nav.rowCur h.toNat w.toNat
   Term.present
   let newColOffset := off
-  let v' := { v' with colVP := ⟨v'.colVP.cursor, newColOffset⟩ }
+  let v' := { v' with nav := { v'.nav with colOff := newColOffset } }
   let s := s.setCur v'
   -- test mode: exit after keys consumed
   if s.testMode && s.keys.isEmpty then
@@ -169,7 +169,7 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
   if r < 0 then
     Backend.logError "Failed to init terminal"
     return
-  let v : View := ⟨path, "from df", "", Viewport.create, Viewport.create, .tbl, none, [], [], [], none, 3⟩
+  let v : View := ⟨path, "from df", "", NavState.create, .tbl, none, [], [], none, 3⟩
   let s : State := { views := [v], keys := keys.toList, testMode := testMode }
   loop s
   Backend.shutdown

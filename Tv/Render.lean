@@ -2,8 +2,10 @@
   Table rendering to terminal
 -/
 import Tv.Types
-import Tv.Viewport
+import Tv.State
 import Tv.Term
+
+open App
 
 namespace Render
 
@@ -255,19 +257,19 @@ theorem cursorRowVisible (curRow visRows : Nat) (hPos : visRows > 0) :
   split <;> omega
 -- Note: cursor column visibility proven by VisRange.hVis : offset ≤ cursor
 
--- | Render table with viewport and key columns, returns (offset, cols, keyW)
-def table (t : Table) (rowVP colVP : Viewport) (screenH screenW : Nat)
-          (keyCols : List Nat := []) (decimals : Nat := 3)
+-- | Render table with nav state, returns (offset, cols, keyW)
+def table (t : Table) (nav : NavState) (screenH screenW : Nat)
+          (decimals : Nat := 3)
           (selCols : List Nat := []) (selRows : List Nat := []) : IO (Nat × Array ColPos × Nat) := do
   Term.clear
   let widths := t.colWidths
-  let curRow := rowVP.cursor
-  let curCol := colVP.cursor
+  let curRow := nav.rowCur
+  let curCol := nav.colCur
   -- all columns scroll together (no pinning)
-  let vr := visibleRange widths colVP.offset curCol screenW keyCols
+  let vr := visibleRange widths nav.colOff curCol screenW nav.keyCols
   let cols := vr.cols
   -- find separator position: after last visible key column (at column gap)
-  let visibleKeyCols := keyCols.filter fun k => cols.any fun (i, _, _) => i == k
+  let visibleKeyCols := nav.keyCols.filter fun k => cols.any fun (i, _, _) => i == k
   let lastKey := visibleKeyCols.foldl max 0
   let sepX := if visibleKeyCols.isEmpty then 0
     else cols.foldl (fun acc (i, x, w) => if i == lastKey then x + w else acc) 0
