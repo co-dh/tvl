@@ -8,6 +8,54 @@ import Tv.Prql
 
 namespace Backend
 
+-- | Cache path for meta data (alongside source file)
+def metaCachePath (path : String) : String := path ++ ".tv.meta"
+
+-- | Serialize cell to string (type:value format)
+def serializeCell : Cell → String
+  | .null => "n:"
+  | .int v => s!"i:{v}"
+  | .float v => s!"f:{v}"
+  | .str v => s!"s:{v.replace "\t" "\\t" |>.replace "\n" "\\n"}"
+  | .bool v => s!"b:{v}"
+
+-- | Parse cell from string
+def parseCell (s : String) : Cell :=
+  if s.startsWith "i:" then .int (s.drop 2 |>.toInt? |>.getD 0)
+  else if s.startsWith "f:" then .float (s.drop 2 |>.toNat? |>.getD 0 |> Float.ofNat)
+  else if s.startsWith "s:" then .str (s.drop 2 |>.replace "\\t" "\t" |>.replace "\\n" "\n")
+  else if s.startsWith "b:" then .bool (s.drop 2 == "true")
+  else .null
+
+-- | Save meta table to cache file
+def saveMetaCache (path : String) (tbl : Table) : IO Unit := do
+  let cachePath := metaCachePath path
+  let colNames := tbl.cols.toList.map (·.name) |> String.intercalate "\t"
+  let rows := tbl.rows.toList.map fun row =>
+    row.toList.map serializeCell |> String.intercalate "\t"
+  let content := colNames :: rows |> String.intercalate "\n"
+  IO.FS.writeFile cachePath content
+
+-- | Load meta table from cache file (returns none if missing/invalid)
+def loadMetaCache (path : String) : IO (Option Table) := do
+  let cachePath := metaCachePath path
+  try
+    -- Check if cache is newer than source
+    let srcMeta ← System.FilePath.metadata path
+    let cacheMeta ← System.FilePath.metadata cachePath
+    if cacheMeta.modified.sec < srcMeta.modified.sec then return none
+    let content ← IO.FS.readFile cachePath
+    let lines := content.splitOn "\n" |>.filter (!·.isEmpty)
+    match lines with
+    | [] => return none
+    | hdr :: dataLines =>
+      let colNames := hdr.splitOn "\t"
+      let cols := colNames.map (⟨·⟩) |>.toArray
+      let rows := dataLines.map fun line =>
+        line.splitOn "\t" |>.map parseCell |>.toArray
+      return some (Table.create cols rows.toArray)
+  catch _ => return none
+
 -- | PRQL function definitions (prepended to all queries)
 -- | Matches rust tv's cfg/funcs.prql
 def prqlFuncs : String := "
@@ -261,9 +309,14 @@ def fmtToType : Char → String
   | 'w' => "date" | 'D' => "timestamp" | 't' => "time"
   | _ => "?"
 
--- | Query column metadata (stats for all columns)
+-- | Query column metadata (stats for all columns), with cache
 def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
-  -- First get column names and types from schema
+  -- Check cache first (only for base prql "from df")
+  let isBasePrql := prql == "from df"
+  if isBasePrql then
+    if let some cached ← loadMetaCache path then
+      return .ok cached
+  -- Cache miss - compute stats
   let schemaPrql := prql ++ " | take 1"
   match ← query (mkLimited schemaPrql 1) path with
   | .error e => return .error e
@@ -292,7 +345,7 @@ def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
           let fmt ← Adbc.colFmt qr c.toUInt64
           types := types.push (fmtToType (fmtChar fmt))
       catch _ => types := (List.replicate colNames.size "?").toArray
-    -- Query stats for each column using type-safe Prql
+    -- Query stats for each column
     let mut rows : Array (Array Cell) := #[]
     for i in [:colNames.size] do
       let colName := colNames.getD i ""
@@ -314,6 +367,10 @@ def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
         else
           rows := rows.push #[.str colName, .str colType, .null, .null, .str "?", .null, .null]
     let metaCols := #[⟨"column"⟩, ⟨"type"⟩, ⟨"cnt"⟩, ⟨"dist"⟩, ⟨"null%"⟩, ⟨"min"⟩, ⟨"max"⟩]
-    return .ok (Table.create metaCols rows)
+    let result := Table.create metaCols rows
+    -- Save to cache for base prql
+    if isBasePrql then
+      try saveMetaCache path result catch _ => pure ()
+    return .ok result
 
 end Backend
