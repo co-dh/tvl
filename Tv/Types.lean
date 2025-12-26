@@ -154,9 +154,16 @@ theorem calcWidths_valid_ex1 :
 
 def empty : Table := ⟨#[], #[], #[]⟩
 
+-- | Get cell at (row, col), returns Option
+def get? (t : Table) (r c : Nat) : Option Cell :=
+  if hr : r < t.rows.size then
+    let row := t.rows[r]
+    if hc : c < row.size then some row[c] else none
+  else none
+
 -- | Get cell at (row, col), default to null
 def get (t : Table) (r c : Nat) : Cell :=
-  t.rows.getD r #[] |>.getD c .null
+  t.get? r c |>.getD .null
 
 -- | Delete column at index
 def delCol (t : Table) (idx : Nat) : Table :=
@@ -196,7 +203,11 @@ def freq (t : Table) (c : Nat) : Table :=
   let counts := t.rows.foldl (init := #[]) fun acc row =>
     let v := row.getD c .null
     match acc.findIdx? (·.1 == v) with
-    | some i => acc.set! i (v, acc[i]!.2 + 1)
+    | some i =>
+      if hi : i < acc.size then
+        let (_, cnt) := acc[i]'hi
+        acc.set i (v, cnt + 1) hi
+      else acc
     | none => acc.push (v, 1)
   -- sort by count descending
   let sorted := counts.qsort (fun a b => a.2 > b.2)

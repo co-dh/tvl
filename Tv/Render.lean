@@ -143,7 +143,6 @@ def cursorInCols (cursor : Nat) (cols : Array ColPos) : Bool :=
 
 -- | Theorem: cursor visible when offset adjusted correctly
 -- Note: this only holds when offset = displayPos cursor (set by adjustOffset)
--- visibleRange just builds cols from offset, doesn't guarantee cursor visibility
 theorem cursorVisible_visibleRange (widths : Array Nat) (offset cursor screenW : Nat) (keyCols : List Nat)
     (hFit : (visibleRange widths offset cursor screenW keyCols).cols.size > 0) :
     cursorInCols cursor (visibleRange widths offset cursor screenW keyCols).cols = true := by
@@ -307,8 +306,9 @@ def memMB : IO Nat := do
     for line in s.splitOn "\n" do
       if line.startsWith "VmRSS:" then
         let parts := line.splitOn " " |>.filter (!·.isEmpty)
-        if parts.length >= 2 then
-          return (parts[1]!.toNat? |>.getD 0) / 1024
+        match parts with
+        | _ :: val :: _ => return (val.toNat? |>.getD 0) / 1024
+        | _ => return 0
     return 0
   catch _ => return 0
 

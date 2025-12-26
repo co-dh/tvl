@@ -46,6 +46,10 @@ def chCaret : UInt32 := 94   -- '^' rename column
 def chDot : UInt32 := 46     -- '.' increase decimals
 def chComma : UInt32 := 44   -- ',' decrease decimals
 
+-- | Meta view column indices (from Backend.queryMeta schema)
+def metaColDist : Nat := 3   -- distinct count column
+def metaColNull : Nat := 4   -- null% column
+
 -- | Key handler context (common params for all handlers)
 structure KeyCtx where
   s  : State         -- app state
@@ -92,8 +96,8 @@ def displayPos (keyCols : List Nat) (nCols cursor : Nat) : Nat :=
   order.findIdx? (· == cursor) |>.getD 0
 
 -- | Count visible columns in display order from offset
-def visColCountDisplay (widths : Array Nat) (keyCols : List Nat) (nCols screenW offset : Nat) : Nat :=
-  let order := Render.displayOrder keyCols nCols
+def visColCountDisplay (widths : Array Nat) (keyCols : List Nat) (screenW offset : Nat) : Nat :=
+  let order := Render.displayOrder keyCols widths.size
   let cols := order.drop offset
   let rec go (cs : List Nat) (w : Nat) (cnt : Nat) : Nat :=
     match cs with
@@ -106,9 +110,8 @@ def visColCountDisplay (widths : Array Nat) (keyCols : List Nat) (nCols screenW 
 
 -- | Adjust offset to keep cursor visible (in display order space)
 def adjustOffset (colOff cursor : Nat) (keyCols : List Nat) (widths : Array Nat) (screenW : Nat) : Nat :=
-  let nCols := widths.size
-  let curPos := displayPos keyCols nCols cursor
-  let visCols := visColCountDisplay widths keyCols nCols screenW colOff
+  let curPos := displayPos keyCols widths.size cursor
+  let visCols := visColCountDisplay widths keyCols screenW colOff
   if curPos < colOff then curPos  -- scroll left: cursor at left edge
   else if curPos >= colOff + visCols then curPos  -- scroll right: cursor at left edge
   else colOff  -- already visible
@@ -188,17 +191,17 @@ theorem isFullNull_0 : isFullNull "0%" = false := rfl
 -- | Theorem: "50%" does not match isFullNull
 theorem isFullNull_50 : isFullNull "50%" = false := rfl
 
--- | Pure: select rows where null% (col 4) is "100%"
+-- | Pure: select rows where null% column is "100%"
 def selectFullNull (tbl : Table) : List Nat :=
   (List.range tbl.nRows).filter fun r =>
-    match tbl.get r 4 with
+    match tbl.get r metaColNull with
     | .str s => isFullNull s
     | _ => false
 
 -- | Theorem: selectFullNull filters exactly rows with isFullNull (by def)
 theorem selectFullNull_def (tbl : Table) :
     selectFullNull tbl = (List.range tbl.nRows).filter fun r =>
-      match tbl.get r 4 with | .str s => isFullNull s | _ => false := rfl
+      match tbl.get r metaColNull with | .str s => isFullNull s | _ => false := rfl
 
 -- | 0 - first column (meta: select rows with 100% null)
 def zero (c : KeyCtx) : KeyResult := do
@@ -215,9 +218,9 @@ def one (c : KeyCtx) : KeyResult := do
   | .colMeta =>
     match c.v.cache with
     | some tbl =>
-      -- select rows where dist (col 3) == 1
+      -- select rows where dist column == 1
       let sel := (List.range tbl.nRows).filter fun r =>
-        match tbl.get r 3 with
+        match tbl.get r metaColDist with
         | .int n => n == 1
         | _ => false
       pure (c.s.setCur { c.v with selRows := sel })
@@ -447,23 +450,22 @@ theorem meta0ret_keyCols (s : PureState) (tbl : Table) (widths : Array Nat) (scr
     s'.keyCols = selectFullNull tbl := by
   simp [handleNav]
 
--- | Combined: adjustOffset ensures cursor visible in display order
+-- | Theorem: adjustOffset ensures cursor visible in display order
 theorem adjustOffset_colVisible (colOff cursor : Nat) (keyCols : List Nat) (widths : Array Nat) (screenW : Nat)
-    (hVis : visColCountDisplay widths keyCols widths.size screenW (adjustOffset colOff cursor keyCols widths screenW) > 0) :
+    (hVis : visColCountDisplay widths keyCols screenW (adjustOffset colOff cursor keyCols widths screenW) > 0) :
     Render.cursorInCols cursor
       (Render.visibleRange widths (adjustOffset colOff cursor keyCols widths screenW) cursor screenW keyCols).cols = true := by
   sorry
 
--- | All nav keys must keep cursor column visible in display order
+-- | Theorem: all nav keys keep cursor column visible in display order
 theorem handleNav_colVisible (s : PureState) (key : NavKey) (widths : Array Nat) (screenW visRows : Nat)
-    (hNC : s.nCols = widths.size)
-    (hVisCols : ∀ off, visColCountDisplay widths s.keyCols s.nCols screenW off > 0) :
+    (hVisCols : ∀ off, visColCountDisplay widths s.keyCols screenW off > 0) :
     let s' := handleNav s key widths screenW visRows
     Render.cursorInCols s'.colCur
       (Render.visibleRange widths s'.colOff s'.colCur screenW s'.keyCols).cols = true := by
   sorry
 
--- | After handleNav .l, cursor must be visible in rendered cols
+-- | Theorem: after handleNav .l, cursor is visible in rendered cols
 theorem handleNav_cursorVisible (s : PureState) (widths : Array Nat) (screenW visRows : Nat)
     (hVis : (Render.visibleRange widths (handleNav s .l widths screenW visRows).colOff
              (handleNav s .l widths screenW visRows).colCur screenW s.keyCols).cols.size > 0) :
