@@ -68,14 +68,14 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
   | .none => return none  -- not in input mode
 
 -- | Handle key event (takes DisplayInfo, not Table - no cell access)
-def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW : Nat) (colWidths : Array Nat) : IO State := do
+def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW : Nat) : IO State := do
   let v := s.cur
   -- handle input mode first
   match ← handleInput s v di ev with
   | some s' => return s'
   | none =>
   -- build context for key handlers
-  let c : KeyCtx := ⟨s, v, di, di.nRows, di.nCols, max 1 (screenH - 2), screenW, colWidths⟩
+  let c : KeyCtx := ⟨s, v, di, max 1 (screenH - 2), screenW⟩
   -- dispatch to key handlers
   if ev.key == Term.keyArrowDown || ev.ch == chJ then Key.j c
   else if ev.key == Term.keyArrowUp || ev.ch == chK then Key.k c
@@ -155,7 +155,7 @@ partial def loop (s : State) : IO Unit := do
       let ev ← Term.pollEvent
       pure (ev, s)
   -- handleKey gets DisplayInfo only - no cell access possible
-  let s' ← if ev.type == Term.eventKey then handleKey s di ev h.toNat w.toNat tbl.colWidths else pure s
+  let s' ← if ev.type == Term.eventKey then handleKey s di ev h.toNat w.toNat else pure s
   loop s'
 
 -- | Run app with optional replay keys

@@ -12,16 +12,9 @@ abbrev ColPos := Nat × Nat × Nat
 
 /-! ## Pure Visibility Model -/
 
--- | Screen context for visibility calculations
-structure ScreenCtx where
-  screenH : Nat      -- screen height
-  screenW : Nat      -- screen width
-  widths  : Array Nat -- column widths
-  nRows   : Nat      -- total rows
-  nCols   : Nat      -- total columns
-
 -- | Count visible columns from offset (how many fit on screen)
-def visColCount (widths : Array Nat) (nCols screenW offset : Nat) : Nat :=
+def visColCount (widths : Array Nat) (screenW offset : Nat) : Nat :=
+  let nCols := widths.size
   let rec go (i w : Nat) : Nat :=
     if i >= nCols then i - offset
     else
@@ -30,20 +23,10 @@ def visColCount (widths : Array Nat) (nCols screenW offset : Nat) : Nat :=
       else go (i + 1) (w + colW)
   if offset >= nCols then 0 else go offset 0
 
--- | Is cursor column visible? Check both left AND right bounds
-def colVisible (cursor : Nat) (offset : Nat) (ctx : ScreenCtx) : Bool :=
-  let visCols := visColCount ctx.widths ctx.nCols ctx.screenW offset
-  offset ≤ cursor && cursor < offset + visCols
-
 -- | Is cursor row visible?
 def rowVisibleP (cursor visRows : Nat) : Bool :=
   let startRow := if cursor < visRows then 0 else cursor - visRows + 1
   startRow ≤ cursor && cursor < startRow + visRows
-
--- | Combined: cursor (row, col) is visible
-def cursorVisible (rowCur colCur colOffset : Nat) (ctx : ScreenCtx) : Bool :=
-  let visRows := ctx.screenH - 1  -- 1 row for header
-  rowVisibleP rowCur visRows && colVisible colCur colOffset ctx
 
 -- | Theorem: row is always visible when visRows > 0
 theorem rowVisibleP_always (cursor visRows : Nat) (h : visRows > 0) :

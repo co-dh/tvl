@@ -47,17 +47,12 @@ def chDot : UInt32 := 46     -- '.' increase decimals
 def chComma : UInt32 := 44   -- ',' decrease decimals
 
 -- | Key handler context (common params for all handlers)
--- Invariant: cw.size = nc (enforced by Table.colWidths from rendering)
--- OLD BUG: runNav used #[] for widths, causing wrong visibility calculation
 structure KeyCtx where
   s  : State         -- app state
   v  : View          -- current view
-  di : DisplayInfo   -- display info (no cell access)
-  nr : Nat           -- row count
-  nc : Nat           -- col count
-  pg : Nat           -- page size
+  di : DisplayInfo   -- display info (colNames, colWidths, nRows, nCols)
+  pg : Nat           -- page size (visible rows)
   sw : Nat           -- screen width
-  cw : Array Nat     -- column widths (must be tbl.colWidths, not #[])
 
 -- | Key handler result
 abbrev KeyResult := IO State
@@ -110,17 +105,17 @@ def visColCountDisplay (widths : Array Nat) (keyCols : List Nat) (nCols screenW 
   go cols 0 0
 
 -- | Adjust offset to keep cursor visible (in display order space)
--- offset and cursor are positions in display order, not original indices
-def adjustOffset (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx) : Nat :=
+def adjustOffset (colOff cursor : Nat) (keyCols : List Nat) (widths : Array Nat) (screenW : Nat) : Nat :=
+  let nCols := widths.size
   let curPos := displayPos keyCols nCols cursor
-  let visCols := visColCountDisplay ctx.widths keyCols nCols ctx.screenW colOff
+  let visCols := visColCountDisplay widths keyCols nCols screenW colOff
   if curPos < colOff then curPos  -- scroll left: cursor at left edge
   else if curPos >= colOff + visCols then curPos  -- scroll right: cursor at left edge
   else colOff  -- already visible
 
 -- | Theorem: adjustOffset ensures offset ≤ curPos (display position)
-theorem adjustOffset_left (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx) :
-    adjustOffset colOff cursor nCols keyCols ctx ≤ displayPos keyCols nCols cursor := by
+theorem adjustOffset_left (colOff cursor : Nat) (keyCols : List Nat) (widths : Array Nat) (screenW : Nat) :
+    adjustOffset colOff cursor keyCols widths screenW ≤ displayPos keyCols widths.size cursor := by
   simp only [adjustOffset]
   split
   · omega  -- curPos < colOff: offset = curPos
@@ -128,80 +123,45 @@ theorem adjustOffset_left (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx 
 
 
 -- | Pure navigation: handle key and return new state
-def handleNav (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx) : PureState :=
-  let visRows := ctx.screenH - 1
+def handleNav (s : PureState) (key : NavKey) (widths : Array Nat) (screenW visRows : Nat) : PureState :=
   match key with
   | .j => { s with rowCur := min (s.rowCur + 1) (s.nRows - 1) }
   | .k => { s with rowCur := s.rowCur - 1 }  -- saturating sub
   | .l =>
     let next := Render.nextInDisplay s.keyCols s.nCols s.colCur
-    let off := adjustOffset s.colOff next s.nCols s.keyCols ctx
+    let off := adjustOffset s.colOff next s.keyCols widths screenW
     { s with colCur := next, colOff := off }
   | .h =>
     let prev := Render.prevInDisplay s.keyCols s.nCols s.colCur
-    let off := adjustOffset s.colOff prev s.nCols s.keyCols ctx
+    let off := adjustOffset s.colOff prev s.keyCols widths screenW
     { s with colCur := prev, colOff := off }
   | .g => { s with rowCur := 0 }
   | .G => { s with rowCur := s.nRows - 1 }
   | .zero => { s with colCur := 0, colOff := 0 }
   | .dollar =>
     let last := s.nCols - 1
-    let off := adjustOffset s.colOff last s.nCols s.keyCols ctx
+    let off := adjustOffset s.colOff last s.keyCols widths screenW
     { s with colCur := last, colOff := off }
   | .ctrlD => { s with rowCur := min (s.rowCur + visRows) (s.nRows - 1) }
   | .ctrlU => { s with rowCur := s.rowCur - min s.rowCur visRows }
   | .retMeta sel =>
     let firstKey := sel.headD 0
-    let off := adjustOffset s.colOff firstKey s.nCols sel ctx
+    let off := adjustOffset s.colOff firstKey sel widths screenW
     { s with keyCols := sel, colCur := firstKey, colOff := off }
 
--- | After handleNav .l, cursor must be visible in rendered cols
--- adjustOffset works in display order space, visibleRange uses displayOrder
-theorem handleNav_cursorVisible (s : PureState) (ctx : Render.ScreenCtx)
-    (hVis : (Render.visibleRange ctx.widths (handleNav s .l ctx).colOff
-             (handleNav s .l ctx).colCur ctx.screenW s.keyCols).cols.size > 0) :
-    Render.cursorInCols (handleNav s .l ctx).colCur
-      (Render.visibleRange ctx.widths (handleNav s .l ctx).colOff
-       (handleNav s .l ctx).colCur ctx.screenW s.keyCols).cols = true := by
-  sorry  -- complex proof: requires showing buildCols includes cursor at adjustOffset position
-
 -- | Concrete test: with keyCols [3,4], display order = [3,4,0,1,2]
--- After pressing 'l' from col 4, cursor moves to 0 (display position 2)
--- adjustOffset returns offset in display order space, visibleRange uses same space
 theorem handleNav_cursorVisible_bug :
     let widths : Array Nat := #[20, 20, 20, 20, 20]
-    let keyCols : List Nat := [3, 4]  -- keyCols reorder: display = [3,4,0,1,2]
-    -- cursor at col 4 (2nd key), offset=0
+    let keyCols : List Nat := [3, 4]
     let s : PureState := ⟨0, 4, 0, keyCols, 10, 5⟩
-    -- narrow screen: only 2 cols fit
-    let ctx : Render.ScreenCtx := ⟨24, 45, widths, 10, 5⟩
-    let s' := handleNav s .l ctx
-    -- After l: nextInDisplay [3,4] 5 4 = 0 (position 2 in [3,4,0,1,2])
-    -- cursor=0 should be visible, offset should keep it in view
+    let s' := handleNav s .l widths 45 23
     Render.cursorInCols s'.colCur
-      (Render.visibleRange widths s'.colOff s'.colCur ctx.screenW keyCols).cols = true := by
-  native_decide  -- Should pass now after fix
-
--- | Visibility predicate on pure state
-def PureState.visible (s : PureState) (ctx : Render.ScreenCtx) : Bool :=
-  let visRows := ctx.screenH - 1
-  Render.rowVisibleP s.rowCur visRows &&
-  Render.colVisible s.colCur s.colOff ctx
-
--- | Extract ctx from KeyCtx (must match rendering ctx)
-def KeyCtx.toScreenCtx (c : KeyCtx) : Render.ScreenCtx :=
-  ⟨c.pg + 1, c.sw, c.cw, c.nr, c.nc⟩
-
--- | Theorem: ctx widths must have correct size (catches empty widths bug)
--- OLD BUG: runNav used #[] for widths, causing wrong visibility calculation
-theorem KeyCtx.widths_size (c : KeyCtx) (h : c.cw.size = c.nc) :
-    c.toScreenCtx.widths.size = c.toScreenCtx.nCols := by
-  simp [toScreenCtx, h]
+      (Render.visibleRange widths s'.colOff s'.colCur 45 keyCols).cols = true := by
+  native_decide
 
 def runNav (c : KeyCtx) (key : NavKey) : State :=
-  let ctx := c.toScreenCtx
-  let p := c.v.toPure c.nr c.nc
-  let p' := handleNav p key ctx
+  let p := c.v.toPure c.di.nRows c.di.nCols
+  let p' := handleNav p key c.di.colWidths c.sw c.pg
   c.s.setCur (c.v.applyPure p')
 
 namespace Key
@@ -309,7 +269,7 @@ def D (c : KeyCtx) : KeyResult := do
     let sortedDel := delCols.toArray.qsort (· > ·) |>.toList
     let newCursor := sortedDel.foldl (fun cur d =>
       if d < cur then cur - 1
-      else if d == cur then min (cur - 1) (c.nc - delCols.length - 1)  -- deleted cursor col
+      else if d == cur then min (cur - 1) (c.di.nCols - delCols.length - 1)  -- deleted cursor col
       else cur) c.v.colVP.cursor
     let newCursor := max 0 (min newCursor (keepCols.length - 1))
     -- Adjust keyCols: remove deleted cols, shift indices down
@@ -329,7 +289,7 @@ def atSign (c : KeyCtx) : KeyResult := do
   match ← runFzf ["--prompt=Column: "] colNamesStr with
   | some col =>
     match c.di.colNames.toList.findIdx? (· == col) with
-    | some idx => pure (c.s.setCur { c.v with colVP := Viewport.goto idx c.nc })
+    | some idx => pure (c.s.setCur { c.v with colVP := Viewport.goto idx c.di.nCols })
     | none => pure c.s
   | none => pure c.s
 
@@ -439,81 +399,78 @@ def retLr (c : KeyCtx) : KeyResult := do
       runBat path
       pure c.s
 
--- | Theorem: j preserves row visibility (cursor stays in bounds)
-theorem handleNav_j_rowVisible (s : PureState) (ctx : Render.ScreenCtx)
-    (hH : ctx.screenH > 1) :
-    let s' := handleNav s .j ctx
-    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
-  simp [handleNav]
-  exact Render.rowVisibleP_always _ _ (by omega)
+-- | Theorem: j preserves row visibility
+theorem handleNav_j_rowVisible (s : PureState) (widths : Array Nat) (screenW visRows : Nat) (hH : visRows > 0) :
+    let s' := handleNav s .j widths screenW visRows
+    Render.rowVisibleP s'.rowCur visRows = true := by
+  simp [handleNav]; exact Render.rowVisibleP_always _ _ hH
 
 -- | Theorem: k preserves row visibility
-theorem handleNav_k_rowVisible (s : PureState) (ctx : Render.ScreenCtx)
-    (hH : ctx.screenH > 1) :
-    let s' := handleNav s .k ctx
-    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
-  simp [handleNav]
-  exact Render.rowVisibleP_always _ _ (by omega)
+theorem handleNav_k_rowVisible (s : PureState) (widths : Array Nat) (screenW visRows : Nat) (hH : visRows > 0) :
+    let s' := handleNav s .k widths screenW visRows
+    Render.rowVisibleP s'.rowCur visRows = true := by
+  simp [handleNav]; exact Render.rowVisibleP_always _ _ hH
 
--- | Theorem: g preserves row visibility (goes to row 0)
-theorem handleNav_g_rowVisible (s : PureState) (ctx : Render.ScreenCtx)
-    (hH : ctx.screenH > 1) :
-    let s' := handleNav s .g ctx
-    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
-  simp [handleNav]
-  exact Render.rowVisibleP_always 0 _ (by omega)
-
--- | Theorem: l moves to next column in DISPLAY order (keyCols first)
--- BUG: current code does colCur + 1, should use nextInDisplay
-theorem handleNav_l_displayOrder (s : PureState) (ctx : Render.ScreenCtx) :
-    let s' := handleNav s .l ctx
+-- | Theorem: l moves to next column in DISPLAY order
+theorem handleNav_l_displayOrder (s : PureState) (widths : Array Nat) (screenW visRows : Nat) :
+    let s' := handleNav s .l widths screenW visRows
     s'.colCur = Render.nextInDisplay s.keyCols s.nCols s.colCur := by
   simp [handleNav]
 
 -- | Theorem: h moves to prev column in DISPLAY order
-theorem handleNav_h_displayOrder (s : PureState) (ctx : Render.ScreenCtx) :
-    let s' := handleNav s .h ctx
+theorem handleNav_h_displayOrder (s : PureState) (widths : Array Nat) (screenW visRows : Nat) :
+    let s' := handleNav s .h widths screenW visRows
     s'.colCur = Render.prevInDisplay s.keyCols s.nCols s.colCur := by
   simp [handleNav]
 
 -- | Theorem: retMeta sets keyCols = sel, cursor = first key col
-theorem handleNav_retMeta_cursor (s : PureState) (sel : List Nat) (ctx : Render.ScreenCtx) :
-    let s' := handleNav s (.retMeta sel) ctx
+theorem handleNav_retMeta_cursor (s : PureState) (sel : List Nat) (widths : Array Nat) (screenW visRows : Nat) :
+    let s' := handleNav s (.retMeta sel) widths screenW visRows
     s'.colCur = sel.headD 0 ∧ s'.keyCols = sel := by
   simp [handleNav]
 
+-- | Main theorem: all nav keys preserve row visibility
+theorem handleNav_rowVisible (s : PureState) (key : NavKey) (widths : Array Nat) (screenW visRows : Nat) (hH : visRows > 0) :
+    let s' := handleNav s key widths screenW visRows
+    Render.rowVisibleP s'.rowCur visRows = true := by
+  cases key <;> simp [handleNav] <;> exact Render.rowVisibleP_always _ _ hH
+
+-- | Theorem: g preserves row visibility (goes to row 0)
+theorem handleNav_g_rowVisible (s : PureState) (widths : Array Nat) (screenW visRows : Nat) (hH : visRows > 0) :
+    let s' := handleNav s .g widths screenW visRows
+    Render.rowVisibleP s'.rowCur visRows = true := by
+  simp [handleNav]; exact Render.rowVisibleP_always 0 _ hH
+
 -- | Theorem: M 0 <ret> sets keyCols = selectFullNull (full null columns)
--- Chain: M shows meta, 0 sets selRows = selectFullNull, <ret> sets keyCols = selRows
-theorem meta0ret_keyCols (s : PureState) (tbl : Table) (ctx : Render.ScreenCtx) :
-    let s' := handleNav s (.retMeta (selectFullNull tbl)) ctx
+theorem meta0ret_keyCols (s : PureState) (tbl : Table) (widths : Array Nat) (screenW visRows : Nat) :
+    let s' := handleNav s (.retMeta (selectFullNull tbl)) widths screenW visRows
     s'.keyCols = selectFullNull tbl := by
   simp [handleNav]
 
--- | Main theorem: all nav keys preserve row visibility
-theorem handleNav_rowVisible (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx)
-    (hH : ctx.screenH > 1) :
-    let s' := handleNav s key ctx
-    Render.rowVisibleP s'.rowCur (ctx.screenH - 1) = true := by
-  cases key <;> simp [handleNav] <;> exact Render.rowVisibleP_always _ _ (by omega)
-
-
 -- | Combined: adjustOffset ensures cursor visible in display order
--- TODO: rewrite to use display order visibility
-theorem adjustOffset_colVisible (colOff cursor nCols : Nat) (keyCols : List Nat) (ctx : Render.ScreenCtx)
-    (hNC : nCols = ctx.nCols)
-    (hVis : visColCountDisplay ctx.widths keyCols nCols ctx.screenW (adjustOffset colOff cursor nCols keyCols ctx) > 0) :
+theorem adjustOffset_colVisible (colOff cursor : Nat) (keyCols : List Nat) (widths : Array Nat) (screenW : Nat)
+    (hVis : visColCountDisplay widths keyCols widths.size screenW (adjustOffset colOff cursor keyCols widths screenW) > 0) :
     Render.cursorInCols cursor
-      (Render.visibleRange ctx.widths (adjustOffset colOff cursor nCols keyCols ctx) cursor ctx.screenW keyCols).cols = true := by
-  sorry  -- TODO: prove with display order
+      (Render.visibleRange widths (adjustOffset colOff cursor keyCols widths screenW) cursor screenW keyCols).cols = true := by
+  sorry
 
 -- | All nav keys must keep cursor column visible in display order
-theorem handleNav_colVisible (s : PureState) (key : NavKey) (ctx : Render.ScreenCtx)
-    (hNC : s.nCols = ctx.nCols)
-    (hVisCols : ∀ off, visColCountDisplay ctx.widths s.keyCols s.nCols ctx.screenW off > 0) :
-    let s' := handleNav s key ctx
+theorem handleNav_colVisible (s : PureState) (key : NavKey) (widths : Array Nat) (screenW visRows : Nat)
+    (hNC : s.nCols = widths.size)
+    (hVisCols : ∀ off, visColCountDisplay widths s.keyCols s.nCols screenW off > 0) :
+    let s' := handleNav s key widths screenW visRows
     Render.cursorInCols s'.colCur
-      (Render.visibleRange ctx.widths s'.colOff s'.colCur ctx.screenW s'.keyCols).cols = true := by
-  sorry  -- TODO: prove with display order
+      (Render.visibleRange widths s'.colOff s'.colCur screenW s'.keyCols).cols = true := by
+  sorry
+
+-- | After handleNav .l, cursor must be visible in rendered cols
+theorem handleNav_cursorVisible (s : PureState) (widths : Array Nat) (screenW visRows : Nat)
+    (hVis : (Render.visibleRange widths (handleNav s .l widths screenW visRows).colOff
+             (handleNav s .l widths screenW visRows).colCur screenW s.keyCols).cols.size > 0) :
+    Render.cursorInCols (handleNav s .l widths screenW visRows).colCur
+      (Render.visibleRange widths (handleNav s .l widths screenW visRows).colOff
+       (handleNav s .l widths screenW visRows).colCur screenW s.keyCols).cols = true := by
+  sorry
 
 -- | Pure: pop meta view and set parent's keyCols
 def popMetaPure (views : List View) (selRows : List Nat) : List View :=
