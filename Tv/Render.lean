@@ -73,6 +73,20 @@ def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
     else
       Term.printPad x.toUInt32 y w.toUInt32 fg bg cellStr
 
+-- | Display order: key columns first, then rest (as names)
+def displayCols (keyCols : List String) (colNames : Array String) : Array String :=
+  let validKeys := keyCols.filter fun k => colNames.any (· == k)
+  let rest := colNames.filter fun c => !validKeys.any (· == c)
+  validKeys.toArray ++ rest
+
+-- | Get column index from name (O(n) linear scan)
+def colIndex (name : String) (colNames : Array String) : Nat :=
+  colNames.findIdx? (· == name) |>.getD 0
+
+-- | Resolve key column names to indices (for compatibility)
+def resolveKeyCols (keyCols : List String) (colNames : Array String) : List Nat :=
+  keyCols.filterMap fun name => colNames.findIdx? (· == name)
+
 -- | Key columns come first in display order
 def keyColsFirst (keyCols : List Nat) (allCols : List Nat) : Bool :=
   allCols.take keyCols.length == keyCols
@@ -119,10 +133,14 @@ structure VisRange where
 
 -- | Compute visible range using display order (keyCols first)
 -- offset is in display order space (position in displayOrder list)
-def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) (keyCols : List Nat) : VisRange :=
-  let order := displayOrder keyCols widths.size
+def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) (keyColIdxs : List Nat) : VisRange :=
+  let order := displayOrder keyColIdxs widths.size
   -- offset is already correct from adjustOffset (in display order space)
   ⟨buildCols widths order offset screenW, offset, cursor⟩
+
+-- | Compute visible range from key column names
+def visibleRangeN (widths : Array Nat) (offset cursor screenW : Nat) (keyCols : List String) (colNames : Array String) : VisRange :=
+  visibleRange widths offset cursor screenW (resolveKeyCols keyCols colNames)
 
 -- | Theorem: visible columns have key columns first (empty keyCols)
 theorem visibleRange_keysFirst_empty (widths : Array Nat) (cursor screenW : Nat) :
@@ -213,18 +231,25 @@ theorem adjustKeyCols_ex2 : adjustKeyCols [3, 10] 5 = [3, 9] := by native_decide
 theorem adjustKeyCols_ex3 : adjustKeyCols [5, 10] 5 = [9] := by native_decide  -- 5 deleted
 
 -- | Navigation should follow display order (next column in display)
-def nextInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
-  let order := displayOrder keyCols nCols
+def nextInDisplay (keyIdxs : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
+  let order := displayOrder keyIdxs nCols
   match order.findIdx? (· == cur) with
   | some i => order.getD (i + 1) cur  -- next in order, or stay
   | none => cur
 
-def prevInDisplay (keyCols : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
-  let order := displayOrder keyCols nCols
+def prevInDisplay (keyIdxs : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
+  let order := displayOrder keyIdxs nCols
   match order.findIdx? (· == cur) with
   | some 0 => cur  -- at start, stay
   | some i => order.getD (i - 1) cur
   | none => cur
+
+-- | Navigation with key column names
+def nextInDisplayN (keyCols : List String) (colNames : Array String) (cur : Nat) : Nat :=
+  nextInDisplay (resolveKeyCols keyCols colNames) colNames.size cur
+
+def prevInDisplayN (keyCols : List String) (colNames : Array String) (cur : Nat) : Nat :=
+  prevInDisplay (resolveKeyCols keyCols colNames) colNames.size cur
 
 -- | Theorem: next in display advances in display order
 -- keyCols=[1], 3 cols → display order is [1,0,2], cursor on 1 → next is 0
@@ -263,15 +288,17 @@ def table (t : Table) (nav : NavState) (screenH screenW : Nat)
           (selCols : List Nat := []) (selRows : List Nat := []) : IO (Nat × Array ColPos × Nat) := do
   Term.clear
   let widths := t.colWidths
+  let colNames := t.cols.map (·.name)
+  let keyIdxs := resolveKeyCols nav.keyCols colNames
   let curRow := nav.rowCur
   let curCol := nav.colCur
   -- all columns scroll together (no pinning)
-  let vr := visibleRange widths nav.colOff curCol screenW nav.keyCols
+  let vr := visibleRange widths nav.colOff curCol screenW keyIdxs
   let cols := vr.cols
   -- find separator position: after last visible key column (at column gap)
-  let visibleKeyCols := nav.keyCols.filter fun k => cols.any fun (i, _, _) => i == k
-  let lastKey := visibleKeyCols.foldl max 0
-  let sepX := if visibleKeyCols.isEmpty then 0
+  let visibleKeyIdxs := keyIdxs.filter fun k => cols.any fun (i, _, _) => i == k
+  let lastKey := visibleKeyIdxs.foldl max 0
+  let sepX := if visibleKeyIdxs.isEmpty then 0
     else cols.foldl (fun acc (i, x, w) => if i == lastKey then x + w else acc) 0
   -- row range (screenH-1: 1 for header at top)
   let visRows := screenH - 1
@@ -351,14 +378,15 @@ def tabLine (views : List (String × String × String)) (y : UInt32) (screenW : 
     if i == n - 1 then s!"[{lbl}]" else lbl
   Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (String.intercalate " | " marked)
 
--- | Render status bar at bottom
-def statusBar (curRow curCol colOff total screenW : Nat) (keyCols selCols selRows : List Nat)
+-- | Render status bar at bottom (keyCols is List String now)
+def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : List String) (selCols selRows : List Nat)
               (colNames : Array String) (y : UInt32) (msg : String := "") : IO Unit := do
   -- left side: message or key/sel columns/rows
+  let dispCols := displayCols keyCols colNames
   let left := if msg.isEmpty then
     let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.length} "
     let selStr := if selCols.isEmpty then ""
-      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun i => colNames.getD i "?")
+      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun i => dispCols.getD i "?")
     let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.length}"
     s!"{keyStr}{selStr}{rowStr}"
   else msg

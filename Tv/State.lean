@@ -8,11 +8,11 @@ namespace App
 
 -- | Core navigation state (cursor + offset for row/col, key columns)
 structure NavState where
-  rowCur  : Nat := 0       -- row cursor
-  rowOff  : Nat := 0       -- row offset (first visible)
-  colCur  : Nat := 0       -- column cursor
-  colOff  : Nat := 0       -- column offset (first visible in display order)
-  keyCols : List Nat := [] -- key columns (pinned left)
+  rowCur  : Nat := 0          -- row cursor
+  rowOff  : Nat := 0          -- row offset (first visible)
+  colCur  : Nat := 0          -- column cursor
+  colOff  : Nat := 0          -- column offset (first visible in display order)
+  keyCols : List String := [] -- key column names (stable across delete)
   deriving Repr
 
 namespace NavState

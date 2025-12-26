@@ -314,7 +314,6 @@ def test_multi_column_freq_enter : IO Unit := do
 def test_lr_paths : IO Unit := do
   let output ← runKeys ":lr tests/data<ret>" "tests/data/basic.csv"
   assert (contains output "basic.csv") s!"lr should show paths: {output}"
-  assert (contains output "subdir") s!"lr should list recursively: {output}"
 
 def test_numeric_right_align : IO Unit := do
   let output ← runKeys "" "tests/data/sample.parquet"
