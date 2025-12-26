@@ -13,11 +13,12 @@ structure NavState where
   colCur  : Nat := 0          -- column cursor
   colOff  : Nat := 0          -- column offset (first visible in display order)
   keyCols : List String := [] -- key column names (stable across delete)
+  delCols : List String := [] -- deleted column names (for EXCLUDE)
   deriving Repr
 
 namespace NavState
-def create : NavState := ⟨0, 0, 0, 0, []⟩
-def goto (col nCols : Nat) : NavState := ⟨0, 0, min col (nCols - 1), 0, []⟩
+def create : NavState := ⟨0, 0, 0, 0, [], []⟩
+def goto (col nCols : Nat) : NavState := ⟨0, 0, min col (nCols - 1), 0, [], []⟩
 end NavState
 
 -- | View kind: how to render/interact

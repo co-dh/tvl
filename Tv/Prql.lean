@@ -18,6 +18,7 @@ inductive Op where
   | filter (expr : String)                         -- filter <expr>
   | sort (cols : List (String × Dir))              -- sort {col, -col2}
   | sel (cols : List String)                       -- select {a, b, c}
+  | excl (cols : List String)                      -- select * exclude (a, b) via DuckDB
   | derive (bindings : List (String × String))     -- derive {x = expr}
   | group (keys : List String) (aggs : List (Agg × String × String))  -- group {k} (agg {name = fn col})
   | freq (col : String)                            -- freq col (builtin)
@@ -60,6 +61,12 @@ def Op.render : Op → String
     let cs := cols.map fun (c, d) => d.render c
     s!"sort \{{String.intercalate ", " cs}}"
   | .sel cols => s!"select \{{String.intercalate ", " (cols.map quote)}}"
+  | .excl cols =>
+    -- Use PRQL s-string for raw SQL: SELECT * EXCLUDE (col1, col2)
+    -- Use SQL double-quotes for identifiers (not PRQL backticks)
+    let sqlQuote s := s!"\\\"{s}\\\""
+    let cs := String.intercalate ", " (cols.map sqlQuote)
+    s!"select s\"* EXCLUDE ({cs})\""
   | .derive bs =>
     let pairs := bs.map fun (n, e) => s!"{quote n} = {e}"
     s!"derive \{{String.intercalate ", " pairs}}"
@@ -96,6 +103,7 @@ def Query.filter (q : Query) (expr : String) : Query := q.pipe (.filter expr)
 def Query.sortAsc (q : Query) (col : String) : Query := q.pipe (.sort [(col, .asc)])
 def Query.sortDesc (q : Query) (col : String) : Query := q.pipe (.sort [(col, .desc)])
 def Query.select (q : Query) (cols : List String) : Query := q.pipe (.sel cols)
+def Query.exclude (q : Query) (cols : List String) : Query := q.pipe (.excl cols)
 def Query.derive1 (q : Query) (name expr : String) : Query := q.pipe (.derive [(name, expr)])
 def Query.freq (q : Query) (col : String) : Query := q.pipe (.freq col)
 def Query.take (q : Query) (n : Nat) : Query := q.pipe (.take n)

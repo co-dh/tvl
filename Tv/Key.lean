@@ -120,10 +120,10 @@ def handleNav (s : PureState) (key : NavKey) (screenW visRows : Nat) : PureState
   | .ctrlU => { s with rowCur := s.rowCur - min s.rowCur visRows }
   | .retMeta sel => { s with keyCols := sel, colCur := 0, colOff := 0 }
 
--- | Concrete test: with keyCols ["c","d"], colCur=4, l moves to 5 (display order = just indices)
+-- | Concrete test: with keyCols ["c","d"], colCur=3, l moves to 4
 theorem handleNav_l_increment :
-    let nav : NavState := ⟨0, 0, 3, 0, ["c", "d"]⟩  -- rowCur, rowOff, colCur, colOff, keyCols
-    let s : PureState := ⟨nav, 10, 5⟩               -- nav, nRows, nCols
+    let nav : NavState := ⟨0, 0, 3, 0, ["c", "d"], []⟩  -- rowCur, rowOff, colCur, colOff, keyCols, delCols
+    let s : PureState := ⟨nav, 10, 5⟩                   -- nav, nRows, nCols
     let s' := handleNav s .l 45 23
     s'.colCur = 4 := by native_decide
 
@@ -234,24 +234,26 @@ def rbrak (c : KeyCtx) : KeyResult := do
     let prql := (Prql.Query.parse c.v.prql).sortDesc (curColName c) |>.render
     pure (c.s.setCur (c.v.copy (prql := prql)))
 
--- | D - delete column(s)
+-- | D - delete column(s) using DuckDB EXCLUDE syntax
 def D (c : KeyCtx) : KeyResult := do
   -- Get display columns and names to delete
   let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
   let delPos := if c.v.selCols.isEmpty then [c.v.nav.colCur] else c.v.selCols
   let delNames := delPos.map fun p => dispCols.getD p "?"
-  let keepCols := c.di.colNames.toList.filter (!delNames.contains ·)
-  if keepCols.length > 0 then
-    let prql := (Prql.Query.parse c.v.prql).select keepCols |>.render
-    let prevDel := if c.v.disp.startsWith "del " then c.v.disp.drop 4 else ""
-    let delStr := String.intercalate "," delNames
-    let newDisp := if prevDel.isEmpty then s!"del {delStr}" else s!"del {prevDel},{delStr}"
-    -- keyCols: just remove deleted names (no index adjustment needed!)
+  -- Merge with existing deleted columns
+  let allDelCols := c.v.nav.delCols ++ delNames.filter (!c.v.nav.delCols.contains ·)
+  let keepCount := c.di.nCols - delNames.length
+  if keepCount > 0 then
+    -- Build PRQL from base "from df" + single EXCLUDE with all deleted cols
+    let prql := (Prql.Query.new "df").exclude allDelCols |>.render
+    let delStr := String.intercalate "," allDelCols
+    let newDisp := s!"del {delStr}"
+    -- keyCols: just remove deleted names
     let newKeyCols := c.v.nav.keyCols.filter (!delNames.contains ·)
     -- Cursor: clamp to valid range
-    let newCursor := min c.v.nav.colCur (keepCols.length - 1)
-    let newOffset := min c.v.nav.colOff (keepCols.length - 1)
-    let newNav := { c.v.nav with colCur := newCursor, colOff := newOffset, keyCols := newKeyCols }
+    let newCursor := min c.v.nav.colCur (keepCount - 1)
+    let newOffset := min c.v.nav.colOff (keepCount - 1)
+    let newNav := { c.v.nav with colCur := newCursor, colOff := newOffset, keyCols := newKeyCols, delCols := allDelCols }
     let v' := { c.v.copy (prql := prql) (nav := newNav) with disp := newDisp, selCols := [] }
     pure (c.s.setCur v'.invalidate)
   else pure c.s
