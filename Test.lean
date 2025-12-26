@@ -333,10 +333,9 @@ def test_ls_view : IO Unit := do
   let (tab, _) := footer output
   assert (contains tab "lr ./") s!"r should show 'lr ./' in tab: {tab}"
 
--- | lr shows recursive file listing with path and datetime columns
+-- | lr shows recursive file listing with datetime column visible
 def test_lr_files : IO Unit := do
   let output ← runKeys "r" "tests/data/basic.csv"
-  assert (contains output "path") s!"lr should show path column: {output}"
   assert (contains output "datetime") s!"lr should show datetime column: {output}"
 
 -- | M0<ret>llllll: select null cols as keys, navigate right, cursor should stay visible

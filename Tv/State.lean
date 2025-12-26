@@ -51,46 +51,47 @@ inductive InputMode where
   | command                 -- command mode
   deriving Inhabited
 
--- | App state with view stack
+-- | App state with non-empty view stack (curView always exists)
 structure State where
-  views    : List View      -- head is current, tail is parent stack
+  curView  : View            -- current view (always exists)
+  parents  : List View := [] -- parent views (can be empty)
   keys     : List Char := [] -- pending keys to replay
-  msg      : String := ""   -- status message
+  msg      : String := ""    -- status message
   quit     : Bool := false
-  testMode : Bool := false  -- exit after keys consumed
+  testMode : Bool := false   -- exit after keys consumed
   inputMode : InputMode := .none  -- current input mode
   inputBuf  : String := ""        -- input buffer for interactive commands
   showInfo : Bool := false        -- show info overlay (toggle with I)
 
--- | Default empty view
-def View.empty : View := ⟨"", "from df", "", NavState.create, .tbl, none, [], [], none, 3⟩
+-- | Current view (just curView, no headD needed)
+def State.cur (s : State) : View := s.curView
 
--- | Current view
-def State.cur (s : State) : View := s.views.headD View.empty
+-- | All views as list (for compatibility)
+def State.views (s : State) : List View := s.curView :: s.parents
 
 -- | Update current view
 def State.setCur (s : State) (v : View) : State :=
-  { s with views := v :: s.views.tailD [] }
+  { s with curView := v }
 
--- | Push new view
+-- | Push new view (current becomes parent)
 def State.push (s : State) (v : View) : State :=
-  { s with views := v :: s.views }
+  { s with curView := v, parents := s.curView :: s.parents }
 
--- | Pop view (returns to parent)
+-- | Pop view (returns to parent, stays if no parent)
 def State.pop (s : State) : State :=
-  { s with views := s.views.tailD [] }
+  match s.parents with
+  | p :: rest => { s with curView := p, parents := rest }
+  | [] => s  -- can't pop last view
 
 -- | Swap top two views
 def State.swapViews (s : State) : State :=
-  match s.views with
-  | v1 :: v2 :: rest => { s with views := v2 :: v1 :: rest }
-  | _ => s
+  match s.parents with
+  | p :: rest => { s with curView := p, parents := s.curView :: rest }
+  | [] => s  -- no parent to swap with
 
 -- | Duplicate current view
 def State.dupView (s : State) : State :=
-  match s.views with
-  | v :: _ => { s with views := v :: s.views }
-  | [] => s
+  { s with parents := s.curView :: s.parents }
 
 -- | Set status message
 def State.setMsg (s : State) (m : String) : State := { s with msg := m }

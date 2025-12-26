@@ -116,7 +116,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
 
 -- | Main event loop
 partial def loop (s : State) : IO Unit := do
-  if s.quit || s.views.isEmpty then return ()
+  if s.quit then return ()  -- curView always exists, no isEmpty check needed
   let v := s.cur
   -- fetch table (uses cache if available)
   let (v', tbl) ← v.fetch
@@ -170,7 +170,7 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
     Backend.logError "Failed to init terminal"
     return
   let v : View := ⟨path, "from df", "", NavState.create, .tbl, none, [], [], none, 3⟩
-  let s : State := { views := [v], keys := keys.toList, testMode := testMode }
+  let s : State := { curView := v, keys := keys.toList, testMode := testMode }
   loop s
   Backend.shutdown
   Term.shutdown
