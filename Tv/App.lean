@@ -70,7 +70,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   | some s' => return s'
   | none =>
   -- build context for key handlers
-  let c : KeyCtx := ⟨v, di, max 1 (screenH - 2), screenW⟩
+  let c : KeyCtx := ⟨v, di, max 1 (screenH - 2), screenW, none⟩
   -- dispatch to key handlers
   if ev.key == Term.keyArrowDown || ev.ch == chJ then pure (runKey c .j s)
   else if ev.key == Term.keyArrowUp || ev.ch == chK then pure (runKey c .k s)

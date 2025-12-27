@@ -47,10 +47,11 @@ def chComma : UInt32 := 44   -- ',' decrease decimals
 
 -- | Key handler context (view info for handlers, State passed separately)
 structure KeyCtx where
-  v  : View          -- current view
-  di : DisplayInfo   -- display info (colNames, colWidths, nRows, nCols)
-  pg : Nat           -- page size (visible rows)
-  sw : Nat           -- screen width
+  v   : View          -- current view
+  di  : DisplayInfo   -- display info (colNames, colWidths, nRows, nCols)
+  pg  : Nat           -- page size (visible rows)
+  sw  : Nat           -- screen width
+  row : Option (Array Cell) := none  -- current row for ret
 
 -- | Key handler result
 abbrev KeyResult := IO State
@@ -67,8 +68,7 @@ inductive PureKey where
   | bang | spc | incDec (inc : Bool) | q | esc
   -- views (push new view)
   | F | r | pushFilter (expr : String) | selectCols (cols : Array String)
-  | pushMeta (metaTbl : SomeTable) | pushFreqFilter (expr : String) (parentQuery : Prql.Query)
-  | pushFld (path : String) (name : String) | pushSource (cmd : String) | pushFile (path : String)
+  | pushMeta (metaTbl : SomeTable) | pushSource (cmd : String) | pushFile (path : String)
   -- input modes
   | inputRename | colon
   -- agg
@@ -210,6 +210,15 @@ def metaSelNames (st : SomeTable) (selRows : Array Nat) : Array String :=
     | .str s => some s
     | _ => none
 
+-- | Build PRQL filter from column names and cell values
+-- Purpose: When Enter on freq row, filter parent to matching rows
+-- Inputs: cols=#["a","b"], vals=#[.int 1, .str "x"]
+-- Steps: mapIdx pairs col name with val, cellToPrql formats value
+-- Expected: "a == 1 && b == 'x'"
+def buildCellFilter (cols : Array String) (vals : Array Cell) : String :=
+  cols.mapIdx (fun i cn => s!"{Prql.quote cn} == {cellToPrql (vals.getD i .null)}")
+    |>.toList |> String.intercalate " && "
+
 -- | Run pure key: single match on (vkind, key)
 def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
@@ -249,23 +258,35 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
                 let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
                 let colStr := cols.join ","
                 s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
-  | _, .r => s.push ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, #[], #[], none, defDecimals⟩
+  | _, .r => s.push ⟨"source:lr:.", {}, "lr ./", {}, .fld, none, #[], #[], none, defDecimals⟩
   | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
   | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
   | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
-  | _, .pushFreqFilter expr pq => s.push ⟨c.v.path, pq.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
-  | _, .pushFld path name => s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
   | _, .colon => { s with inputMode := .command, inputBuf := "" }
   | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
-  -- ret: pure cases (colMeta -> pop to parent, others -> no-op for pure, IO handled separately)
+  -- ret: view-specific behavior
   | .colMeta, .ret => if c.v.selRows.isEmpty then s
                       else c.v.cache.map (fun st => popMetaState s (metaSelNames st c.v.selRows)) |>.getD s
-  | .tbl, .ret => s  -- plain table: no-op (special sources handled in IO)
-  | .fld, .ret => s  -- folder: handled in IO (retFld)
-  | .freqV _, .ret => s  -- freqV: handled in IO (retFreq)
+  | .tbl, .ret => s  -- plain table: no-op
+  | .fld, .ret =>
+    -- folder view: push subfolder if c.row set by IO
+    let pfx := if c.v.path.startsWith srcLs then srcLs else srcLr
+    c.row.bind (fun vals =>
+      vals.getD srcColPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
+        let base := c.v.path.drop pfx.length
+        let path := if base == "." then name else s!"{base}/{name}"
+        s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .fld, none, #[], #[], none, defDecimals⟩
+    ) |>.getD s
+  | .freqV colNames, .ret =>
+    let cols := colNames.splitOn "," |>.map String.trim |>.toArray
+    let pq := s.parents.getD 0 c.v |>.query
+    c.row.map (fun vals =>
+      let expr := buildCellFilter cols vals
+      s.push ⟨c.v.path, pq.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
+    ) |>.getD s
 
 namespace Key
 
@@ -305,23 +326,13 @@ def M (c : KeyCtx) (s : State) : KeyResult :=
   Backend.queryMeta c.v.query.render c.v.path
     <&> fun r => r.toOption.map (fun t => runKey c (.pushMeta t) s) |>.getD s
 
--- | Build PRQL filter from column names and cell values
--- Purpose: When Enter on freq row, filter parent to matching rows
--- Inputs: cols=#["a","b"], vals=#[.int 1, .str "x"]
--- Steps: mapIdx pairs col name with val, cellToPrql formats value
--- Expected: "a == 1 && b == 'x'"
-def buildCellFilter (cols : Array String) (vals : Array Cell) : String :=
-  cols.mapIdx (fun i cn => s!"{Prql.quote cn} == {cellToPrql (vals.getD i .null)}")
-    |>.toList |> String.intercalate " && "
-
--- | ret on freqV: push filtered view based on selected row
+-- | ret on freqV: query row, call pure ret
 def retFreq (c : KeyCtx) (colNames : String) (s : State) : KeyResult :=
   let cols := colNames.splitOn "," |>.map String.trim |>.toArray
-  let pq := s.parents.getD 0 c.v |>.query  -- parent view's query
   Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur cols.size
-    <&> fun r => r.toOption.map (fun v => runKey c (.pushFreqFilter (buildCellFilter cols v) pq) s) |>.getD s
+    <&> fun r => r.toOption.map (fun v => runKey { c with row := some v } .ret s) |>.getD s
 
--- | ret on source (ls/lr): enter directory or open file with bat
+-- | ret on source (ls/lr): query row, dir→pure ret, file→bat
 def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
   let mkPath := fun name => let base := c.v.path.drop pfx.length
                             if base == "." then name else s!"{base}/{name}"
@@ -329,18 +340,14 @@ def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
     r.toOption.bind (fun vals =>
       vals.getD srcColPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
         let perms := vals.getD srcColPerms .null |>.str?.getD ""
-        if perms.startsWith "d" then pure (runKey c (.pushFld (mkPath name) name) s)
+        if perms.startsWith "d" then pure (runKey { c with row := some vals } .ret s)
         else runBat (mkPath name) *> pure s
     ) |>.getD (pure s)
 
--- | ret on folder (source:ls)
-def retFld (c : KeyCtx) (s : State) : KeyResult := retSource c s srcLs
-
--- | ret on lr (source:lr)
-def retLr (c : KeyCtx) (s : State) : KeyResult := retSource c s srcLr
-
--- | ret on tbl: no-op
-def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
+-- | ret on folder (source:ls/lr)
+def retFld (c : KeyCtx) (s : State) : KeyResult :=
+  let pfx := if c.v.path.startsWith srcLs then srcLs else srcLr
+  retSource c s pfx
 
 -- | Theorem: j increments rowCur (clamped to lastRow)
 theorem runKey_j_rowCur (c : KeyCtx) (s : State) :
@@ -370,10 +377,7 @@ theorem popMetaState_cursor (s : State) (sel : Array String) (h : s.parents.size
 def ret (c : KeyCtx) (s : State) : KeyResult :=
   match c.v.vkind with
   | .freqV colNames => retFreq c colNames s
-  | .tbl =>
-    if c.v.path.startsWith srcLs then retFld c s
-    else if c.v.path.startsWith srcLr then retLr c s
-    else pure (runKey c .ret s)
+  | .tbl => pure (runKey c .ret s)
   | .colMeta => pure (runKey c .ret s)
   | .fld => retFld c s
 
