@@ -19,6 +19,10 @@ def Array.findDispIdx? (arr : Array α) (p : α → Bool) : Option DispIdx :=
 def Array.join (arr : Array String) (sep : String) : String :=
   String.intercalate sep arr.toList
 
+-- | Toggle element in array (add if absent, remove if present)
+def Array.toggle [BEq α] (arr : Array α) (x : α) : Array α :=
+  if arr.contains x then arr.filter (· != x) else arr.push x
+
 -- | Cell value (sum type)
 inductive Cell where
   | null

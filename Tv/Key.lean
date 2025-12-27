@@ -111,12 +111,16 @@ def sortBy (v : View) (col : String) (asc : Bool) : View :=
   let cols := if v.nav.keyCols.contains col then v.nav.keyCols else v.nav.keyCols.push col
   v.copy (query := v.query.pipe (.sort (cols.map (·, asc))))
 
+-- | Get selected columns + current column (unique, cur always last)
+def selColNames (v : View) (di : DisplayInfo) : Array String :=
+  let dispCols := Render.displayCols v.nav.keyCols di.colNames
+  let cur := dispCols.getDisp v.nav.colCur "?"
+  v.selCols.filter (· != cur) |>.push cur
+
 -- | Delete columns from view (returns none if no cols left)
 def delCols (v : View) (di : DisplayInfo) : Option View :=
-  let dispCols := Render.displayCols v.nav.keyCols di.colNames
   let curIdx := v.nav.colCur
-  let delPos := if v.selCols.isEmpty then #[curIdx] else v.selCols
-  let delNames := delPos.map fun p => dispCols.getDisp p "?"
+  let delNames := selColNames v di
   let allDelCols := v.nav.delCols ++ delNames.filter (!v.nav.delCols.contains ·)
   let keepCols := di.colNames.filter (!delNames.contains ·)
   if keepCols.size > 0 then
@@ -134,8 +138,7 @@ def delCols (v : View) (di : DisplayInfo) : Option View :=
 def toggleKeyCols (v : View) (di : DisplayInfo) : View :=
   let dispCols := Render.displayCols v.nav.keyCols di.colNames
   let curName := dispCols.getDisp v.nav.colCur "?"
-  let colPos := if v.selCols.isEmpty then #[v.nav.colCur] else v.selCols
-  let colNames := colPos.map fun p => dispCols.getDisp p "?"
+  let colNames := selColNames v di
   let allIn := colNames.all v.nav.keyCols.contains
   let newKeys := if allIn then v.nav.keyCols.filter (!colNames.contains ·)
                  else v.nav.keyCols ++ colNames.filter (!v.nav.keyCols.contains ·)
@@ -145,16 +148,10 @@ def toggleKeyCols (v : View) (di : DisplayInfo) : View :=
   | none => v
 
 -- | Toggle column/row selection
-def toggleSel (v : View) : View :=
-  match v.vkind with
-  | .colMeta =>
-    let row := v.nav.rowCur
-    let newSel := if v.selRows.contains row then v.selRows.filter (· != row) else v.selRows.push row
-    { v with selRows := newSel }
-  | _ =>
-    let col := v.nav.colCur
-    let newSel := if v.selCols.contains col then v.selCols.filter (· != col) else v.selCols.push col
-    { v with selCols := newSel }
+def toggleSel (c : KeyCtx) : View :=
+  match c.v.vkind with
+  | .colMeta => { c.v with selRows := c.v.selRows.toggle c.v.nav.rowCur }
+  | _        => { c.v with selCols := c.v.selCols.toggle (curColName c) }
 
 -- | Clear selections
 def clearSel (v : View) : Option View :=
@@ -198,13 +195,13 @@ def adjOff (c : KeyCtx) (nav : PureState) : PureState :=
 @[simp] theorem adjOff_colCur (c : KeyCtx) (nav : PureState) : (adjOff c nav).colCur = nav.colCur := rfl
 @[simp] theorem adjOff_keyCols (c : KeyCtx) (nav : PureState) : (adjOff c nav).keyCols = nav.keyCols := rfl
 
--- | Pure: pop meta view and set parent's keyCols
+-- | Pure: pop meta view and set parent's keyCols + selCols
 def popMetaState (s : State) (selColNames : Array String) : State :=
   if h : s.parents.size > 0 then
     let parent := s.parents[0]
     let rest := s.parents.extract 1 s.parents.size
     let nav' := { parent.nav with keyCols := selColNames, colCur := ⟨0⟩, colOff := ⟨0⟩ }
-    let parent' := { parent with nav := nav' }
+    let parent' := { parent with nav := nav', selCols := selColNames }
     { s with curView := parent', parents := rest }
   else s
 
@@ -246,7 +243,7 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .dup => s.dupView
   | _, .swap => s.swapViews
   | _, .toggleKey => s.setCur (toggleKeyCols c.v c.di)
-  | _, .toggleSel => s.setCur (toggleSel c.v)
+  | _, .toggleSel => s.setCur (toggleSel c)
   | _, .incDec inc => s.setCur (adjDecimals c.v inc)
   | _, .quit => quitOrPop s
   | _, .clearSel => clearSel c.v |>.map s.setCur |>.getD s
@@ -402,14 +399,10 @@ def getAggFuncs (s : State) (keyNames aggNames : Array String) : IO (Array Prql.
 def b (c : KeyCtx) (s : State) : KeyResult := do
   if c.v.nav.keyCols.isEmpty then pure { s with msg := "Set key columns first with !" }
   else
-    let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
     let keyNames := c.v.nav.keyCols
-    let aggPos := if c.v.selCols.isEmpty then #[c.v.nav.colCur] else c.v.selCols
-    let aggNames := aggPos.map fun p => dispCols.getDisp p "?"
-    if aggNames.isEmpty then pure { s with msg := "No columns to aggregate" }
-    else
-      let funcs ← getAggFuncs s keyNames aggNames
-      pure (if funcs.isEmpty then s else runKey c (.pushAgg keyNames funcs aggNames) s)
+    let aggNames := selColNames c.v c.di
+    let funcs ← getAggFuncs s keyNames aggNames
+    pure (if funcs.isEmpty then s else runKey c (.pushAgg keyNames funcs aggNames) s)
 
 -- | : - command mode (fzf select source)
 def colon (c : KeyCtx) (s : State) : KeyResult :=

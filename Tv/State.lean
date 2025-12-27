@@ -43,7 +43,7 @@ structure View where
   nav      : PureState := {}     -- navigation state
   vkind    : ViewKind := .tbl
   cache    : Option SomeTable := none
-  selCols  : Array DispIdx := #[]  -- selected columns (display order)
+  selCols  : Array String := #[]   -- selected column names
   selRows  : Array Nat := #[]
   total    : Option Nat := none
   decimals : Nat := defDecimals

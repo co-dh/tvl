@@ -30,11 +30,11 @@ theorem rowVisibleP_always (cursor visRows : Nat) (h : visRows > 0) :
 
 -- | Render header row with underline attribute (highlights selected columns)
 def header (st : SomeTable) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
-           (selCols : Array Nat := #[]) : IO Unit := do
+           (selCols : Array String := #[]) : IO Unit := do
   let colNames := st.table.colNames
   for (i, x, w) in cols do
     let name := colNames.getD i ""
-    let isSel := selCols.contains i
+    let isSel := selCols.contains name
     let (fg, bg) := if i == selCol then (Term.black, Term.cyan)
                     else if isSel then (Term.black, Term.magenta)
                     else (Term.cyan ||| Term.underline, Term.default)
@@ -42,13 +42,14 @@ def header (st : SomeTable) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
 
 -- | Render single data row with decimal precision (highlights selected cols/rows)
 def row (st : SomeTable) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
-        (y : UInt32) (selCols : Array Nat := #[]) (selRows : Array Nat := #[]) : IO Unit := do
+        (y : UInt32) (selCols : Array String := #[]) (selRows : Array Nat := #[]) : IO Unit := do
+  let colNames := st.table.colNames
   let isCurRow := rowIdx == curRow
   let isSelRow := selRows.contains rowIdx
   for (i, x, w) in cols do
     let cell := st.table.getIdx rowIdx i
     let isCursor := isCurRow && i == curCol
-    let isSel := selCols.contains i
+    let isSel := selCols.contains (colNames.getD i "")
     let (fg, bg) := if isCursor then (Term.black, Term.white)
                     else if isSelRow then (Term.black, Term.green)  -- selected row
                     else if isSel && isCurRow then (Term.black, Term.magenta)
@@ -217,17 +218,16 @@ theorem cursorRowVisible (curRow visRows : Nat) (hPos : visRows > 0) :
 -- | Render table with nav state, returns (offset, cols, keyW)
 def table (st : SomeTable) (nav : PureState) (screenH screenW : Nat)
           (decimals : Nat := 3)
-          (selCols : Array DispIdx := #[]) (selRows : Array Nat := #[]) : IO (Nat × Array ColPos × Nat) := do
+          (selCols : Array String := #[]) (selRows : Array Nat := #[]) : IO (Nat × Array ColPos × Nat) := do
   Term.clear
   let widths := st.table.colWidths
   let colNames := st.table.colNames
   let keyIdxs := resolveKeyCols nav.keyCols colNames
   let curRow := nav.rowCur
   let colOff := nav.colOff.val
-  -- convert display indices to original column indices for header/row
+  -- convert display cursor to original column index
   let dispCols := displayCols nav.keyCols colNames
   let curColOrig := colIndex (dispCols.getDisp nav.colCur "") colNames
-  let selColIdxs := selCols.map fun d => colIndex (dispCols.getDisp d "") colNames
   -- all columns scroll together (no pinning)
   let vr := visibleRange widths colOff nav.colCur.val screenW keyIdxs
   let cols := vr.cols
@@ -241,12 +241,12 @@ def table (st : SomeTable) (nav : PureState) (screenH screenW : Nat)
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
   let endRow := min st.nRows (startRow + visRows)
   -- render header
-  header st cols curColOrig 0 selColIdxs
+  header st cols curColOrig 0 selCols
   if sepX > 0 then Term.print sepX.toUInt32 0 Term.default Term.default "|"
   -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
-    row st cols ri curRow curColOrig decimals (i + 1).toUInt32 selColIdxs selRows
+    row st cols ri curRow curColOrig decimals (i + 1).toUInt32 selCols selRows
     if sepX > 0 then Term.print sepX.toUInt32 (i + 1).toUInt32 Term.default Term.default "|"
   return (vr.offset, cols, sepX)
 
@@ -315,16 +315,14 @@ def tabLine (views : Array (String × String × String)) (y : UInt32) (screenW :
   Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (marked.join " | ")
 
 -- | Render status bar at bottom
-def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : Array String) (selCols : Array DispIdx) (selRows : Array Nat)
-              (colNames : Array String) (y : UInt32) (msg : String := "") (err : String := "") : IO Unit := do
+def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : Array String) (selCols : Array String) (selRows : Array Nat)
+              (y : UInt32) (msg : String := "") (err : String := "") : IO Unit := do
   -- left side: error (red), message, or key/sel columns/rows
-  let dispCols := displayCols keyCols colNames
   let (left, fg) := if !err.isEmpty then (err.take (screenW - 20), Term.red)
     else if !msg.isEmpty then (msg, Term.cyan)
     else
       let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.size} "
-      let selStr := if selCols.isEmpty then ""
-        else s!"sel={selCols.size} *" ++ (selCols.map fun d => dispCols.getDisp d "?").join ","
+      let selStr := if selCols.isEmpty then "" else s!"sel={selCols.size} *{selCols.join ","}"
       let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.size}"
       (s!"{keyStr}{selStr}{rowStr}", Term.cyan)
   -- right side: col info + mem + row/total
