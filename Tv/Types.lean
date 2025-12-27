@@ -1,5 +1,5 @@
 /-
-  Core types: Cell, Column, Table
+  Core types: Cell, Column, Table, PureKey
   Table stores columns by name (HashMap) for direct name-based access
 -/
 import Std.Data.HashMap
@@ -202,3 +202,21 @@ def empty : IO SomeTable := do
   ofQueryResult qr
 
 end SomeTable
+
+-- | All pure key operations (no IO needed)
+inductive PureKey where
+  -- navigation
+  | j | k | l | h | g | G | _0 | _1 | dollar | c_d | c_u
+  | colJump (idx : DispIdx)
+  -- view transforms
+  | asc | desc | D | I | dup | swap
+  | bang | spc | incDec (inc : Bool) | q | esc
+  -- views (push new view)
+  | F | r | pushFilter (expr : String) | selectCols (cols : Array String)
+  | pushMeta (metaTbl : SomeTable) | pushSource (cmd : String) | pushFile (path : String)
+  -- input modes
+  | inputRename | colon
+  -- agg (funcs as strings: "count", "sum", "average", "min", "max", "stddev")
+  | pushAgg (keys : Array String) (funcs : Array String) (cols : Array String)
+  -- enter key
+  | ret

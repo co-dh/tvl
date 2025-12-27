@@ -154,4 +154,21 @@ theorem popState_cursor (s : State) (sel : Array String) (h : s.parents.size > 0
     (popState s sel).curView.nav.keyCols = sel := by
   simp [popState, h]
 
+-- | Handle meta-specific keys. Returns none if not handled.
+def runKey (v : View) (s : State) (key : PureKey) : Option State :=
+  match key with
+  | ._0  => v.cache.map fun st => s.setCur { v with selRows := selNull st }
+  | ._1  => v.cache.map fun st => s.setCur { v with selRows := selSingle st }
+  | .ret => if v.selRows.isEmpty then none
+            else v.cache.map fun st => popState s (selNames st v.selRows)
+  | _    => none
+
+-- | Simp lemmas for keys Meta doesn't handle (used by Key.lean theorems)
+@[simp] theorem runKey_j : runKey v s .j = none := rfl
+@[simp] theorem runKey_k : runKey v s .k = none := rfl
+@[simp] theorem runKey_l : runKey v s .l = none := rfl
+@[simp] theorem runKey_h : runKey v s .h = none := rfl
+@[simp] theorem runKey_g : runKey v s .g = none := rfl
+@[simp] theorem runKey_G : runKey v s .G = none := rfl
+
 end App.Meta

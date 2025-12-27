@@ -57,26 +57,6 @@ structure KeyCtx where
 -- | Key handler result
 abbrev KeyResult := IO State
 
-/-! ## Pure keys (no IO) -/
-
--- | All pure key operations
-inductive PureKey where
-  -- navigation
-  | j | k | l | h | g | G | _0 | _1 | dollar | c_d | c_u
-  | colJump (idx : DispIdx)
-  -- view transforms
-  | asc | desc | D | I | dup | swap
-  | bang | spc | incDec (inc : Bool) | q | esc
-  -- views (push new view)
-  | F | r | pushFilter (expr : String) | selectCols (cols : Array String)
-  | pushMeta (metaTbl : SomeTable) | pushSource (cmd : String) | pushFile (path : String)
-  -- input modes
-  | inputRename | colon
-  -- agg
-  | pushAgg (keys : Array String) (funcs : Array Prql.Agg) (cols : Array String)
-  -- enter key (pure cases only)
-  | ret
-
 -- | Count visible columns from display position offset
 def visColCount (dispCols : Array String) (colNames : Array String) (widths : Array Nat) (screenW offset : Nat) : Nat :=
   let rec go (i w cnt : Nat) : Nat :=
@@ -189,74 +169,83 @@ def buildCellFilter (cols : Array String) (vals : Array Cell) : String :=
   cols.mapIdx (fun i cn => s!"{Prql.quote cn} == {cellToPrql (vals.getD i .null)}")
     |>.toList |> String.intercalate " && "
 
+-- | Parse agg function name to Prql.Agg
+def parseAgg : String → Option Prql.Agg
+  | "count" => some .count | "sum" => some .sum | "average" => some .avg
+  | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
+
 -- | Run pure key: single match on (vkind, key)
 def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
-  let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
-  let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
-  let n := c.v.nav
-  match c.v.vkind, key with
-  -- colMeta special: 0 selects 100% null, 1 selects single-value
-  | .colMeta, ._0 => c.v.cache.map (fun st => s.setCur { c.v with selRows := Meta.selNull st }) |>.getD s
-  | .colMeta, ._1 => c.v.cache.map (fun st => s.setCur { c.v with selRows := Meta.selSingle st }) |>.getD s
-  -- navigation: j/k/l/h/g/G/0/$/ctrlD/ctrlU/retMeta/colJump
-  | _, .j => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + 1) lastRow } }
-  | _, .k => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - 1 } }
-  | _, .l => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨min (n.colCur.val + 1) lastCol⟩ } }
-  | _, .h => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨if n.colCur.val > 0 then n.colCur.val - 1 else 0⟩ } }
-  | _, .g => s.setCur { c.v with nav := adjOff c { n with rowCur := 0 } }
-  | _, .G => s.setCur { c.v with nav := adjOff c { n with rowCur := lastRow } }
-  | _, ._0 => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨0⟩, colOff := ⟨0⟩ } }
-  | _, ._1 => s  -- non-colMeta: no-op
-  | _, .dollar => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨lastCol⟩ } }
-  | _, .c_d => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + c.pg) lastRow } }
-  | _, .c_u => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - min n.rowCur c.pg } }
-  | _, .colJump idx => s.setCur { c.v with nav := adjOff c { n with colCur := idx } }
-  -- view transforms
-  | _, .asc => s.setCur (sortBy c.v (curColName c) true)
-  | _, .desc => s.setCur (sortBy c.v (curColName c) false)
-  | _, .D => delCols c.v c.di |>.map s.setCur |>.getD s
-  | _, .I => { s with showInfo := !s.showInfo }
-  | _, .dup => s.dupView
-  | _, .swap => s.swapViews
-  | _, .bang => s.setCur (toggleKeyCols c.v c.di)
-  | _, .spc => s.setCur (toggleSel c)
-  | _, .incDec inc => s.setCur (adjDecimals c.v inc)
-  | _, .q => quitOrPop s
-  | _, .esc => clearSel c.v |>.map s.setCur |>.getD s
-  -- push views (freq: add curCol only if not already in keyCols)
-  | _, .F => let cur := curColName c
-                let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
-                let colStr := cols.join ","
-                s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
-  | _, .r => s.push ⟨"source:lr:.", {}, "lr ./", {}, .fld, none, #[], #[], none, defDecimals⟩
-  | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
-  | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
-  | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
-  | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
-  | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
-  | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
-  | _, .colon => { s with inputMode := .command, inputBuf := "" }
-  | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
-  -- ret: view-specific behavior
-  | .colMeta, .ret => if c.v.selRows.isEmpty then s
-                      else c.v.cache.map (fun st => Meta.popState s (Meta.selNames st c.v.selRows)) |>.getD s
-  | .tbl, .ret => s  -- plain table: no-op
-  | .fld, .ret =>
-    -- folder view: push subfolder if c.row set by IO
-    let pfx := if c.v.path.startsWith srcLs then srcLs else srcLr
-    c.row.bind (fun vals =>
-      vals.getD srcColPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
-        let base := c.v.path.drop pfx.length
-        let path := if base == "." then name else s!"{base}/{name}"
-        s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .fld, none, #[], #[], none, defDecimals⟩
-    ) |>.getD s
-  | .freqV colNames, .ret =>
-    let cols := colNames.splitOn "," |>.map String.trim |>.toArray
-    let pq := s.parents.getD 0 c.v |>.query
-    c.row.map (fun vals =>
-      let expr := buildCellFilter cols vals
-      s.push ⟨c.v.path, pq.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
-    ) |>.getD s
+  -- Try view-specific handler first
+  match c.v.vkind with
+  | .colMeta => if let some s' := Meta.runKey c.v s key then s' else runKeyDefault c key s
+  | _ => runKeyDefault c key s
+where
+  -- | Default key handling for all views
+  runKeyDefault (c : KeyCtx) (key : PureKey) (s : State) : State :=
+    let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
+    let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
+    let n := c.v.nav
+    match c.v.vkind, key with
+    -- navigation
+    | _, .j => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + 1) lastRow } }
+    | _, .k => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - 1 } }
+    | _, .l => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨min (n.colCur.val + 1) lastCol⟩ } }
+    | _, .h => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨if n.colCur.val > 0 then n.colCur.val - 1 else 0⟩ } }
+    | _, .g => s.setCur { c.v with nav := adjOff c { n with rowCur := 0 } }
+    | _, .G => s.setCur { c.v with nav := adjOff c { n with rowCur := lastRow } }
+    | _, ._0 => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨0⟩, colOff := ⟨0⟩ } }
+    | _, ._1 => s
+    | _, .dollar => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨lastCol⟩ } }
+    | _, .c_d => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + c.pg) lastRow } }
+    | _, .c_u => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - min n.rowCur c.pg } }
+    | _, .colJump idx => s.setCur { c.v with nav := adjOff c { n with colCur := idx } }
+    -- view transforms
+    | _, .asc => s.setCur (sortBy c.v (curColName c) true)
+    | _, .desc => s.setCur (sortBy c.v (curColName c) false)
+    | _, .D => delCols c.v c.di |>.map s.setCur |>.getD s
+    | _, .I => { s with showInfo := !s.showInfo }
+    | _, .dup => s.dupView
+    | _, .swap => s.swapViews
+    | _, .bang => s.setCur (toggleKeyCols c.v c.di)
+    | _, .spc => s.setCur (toggleSel c)
+    | _, .incDec inc => s.setCur (adjDecimals c.v inc)
+    | _, .q => quitOrPop s
+    | _, .esc => clearSel c.v |>.map s.setCur |>.getD s
+    -- push views
+    | _, .F => let cur := curColName c
+               let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
+               let colStr := cols.join ","
+               s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
+    | _, .r => s.push ⟨"source:lr:.", {}, "lr ./", {}, .fld, none, #[], #[], none, defDecimals⟩
+    | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
+    | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
+    | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
+    | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
+    | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
+    | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
+    | _, .colon => { s with inputMode := .command, inputBuf := "" }
+    | _, .pushAgg keys funcs cols =>
+        let aggs := funcs.filterMap parseAgg
+        if aggs.isEmpty then s
+        else s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys aggs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
+    -- ret: view-specific
+    | .fld, .ret =>
+      let pfx := if c.v.path.startsWith srcLs then srcLs else srcLr
+      c.row.bind (fun vals =>
+        vals.getD srcColPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
+          let base := c.v.path.drop pfx.length
+          let path := if base == "." then name else s!"{base}/{name}"
+          s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .fld, none, #[], #[], none, defDecimals⟩
+      ) |>.getD s
+    | .freqV colNames, .ret =>
+      let cols := colNames.splitOn "," |>.map String.trim |>.toArray
+      let pq := s.parents.getD 0 c.v |>.query
+      c.row.map (fun vals =>
+        let expr := buildCellFilter cols vals
+        s.push ⟨c.v.path, pq.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
+      ) |>.getD s
+    | _, .ret => s
 
 namespace Key
 
@@ -323,18 +312,18 @@ def retFld (c : KeyCtx) (s : State) : KeyResult :=
 theorem runKey_j_rowCur (c : KeyCtx) (s : State) :
     let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
     (runKey c .j s).curView.nav.rowCur = min (c.v.nav.rowCur + 1) lastRow := by
-  simp [runKey, State.setCur]
+  simp only [runKey]; cases c.v.vkind <;> simp [runKey.runKeyDefault, State.setCur]
 
 -- | Theorem: k decrements rowCur (saturating at 0)
 theorem runKey_k_rowCur (c : KeyCtx) (s : State) :
     (runKey c .k s).curView.nav.rowCur = c.v.nav.rowCur - 1 := by
-  simp [runKey, State.setCur]
+  simp only [runKey]; cases c.v.vkind <;> simp [runKey.runKeyDefault, State.setCur]
 
 -- | Theorem: l increments colCur (clamped to lastCol)
 theorem runKey_l_colCur (c : KeyCtx) (s : State) :
     let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
     (runKey c .l s).curView.nav.colCur.val = min (c.v.nav.colCur.val + 1) lastCol := by
-  simp [runKey, State.setCur]
+  simp only [runKey]; cases c.v.vkind <;> simp [runKey.runKeyDefault, State.setCur]
 
 -- | ret - enter key (dispatch by ViewKind, IO cases)
 def ret (c : KeyCtx) (s : State) : KeyResult :=
@@ -344,18 +333,12 @@ def ret (c : KeyCtx) (s : State) : KeyResult :=
   | .colMeta => pure (runKey c .ret s)
   | .fld => retFld c s
 
--- | Parse agg function name to Prql.Agg
-def parseAgg : String → Option Prql.Agg
-  | "count" => some .count | "sum" => some .sum | "average" => some .avg
-  | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
-
--- | Get agg functions via fzf multi-select
-def getAggFuncs (s : State) (keyNames aggNames : Array String) : IO (Array Prql.Agg) := do
+-- | Get agg function names via fzf multi-select
+def getAggFuncs (s : State) (keyNames aggNames : Array String) : IO (Array String) := do
   let keysStr := keyNames.join ","
   let colsStr := aggNames.join ","
   let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
-  let names ← fzfMulti #["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev" s.testMode
-  pure (names.filterMap parseAgg)
+  fzfMulti #["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev" s.testMode
 
 -- | b - aggregate by key columns
 def b (c : KeyCtx) (s : State) : KeyResult := do

@@ -5,10 +5,10 @@ import Tv.Types
 
 namespace Prql
 
--- | Aggregate function
+-- | Aggregate function (for PRQL group/agg)
 inductive Agg where
   | count | sum | avg | min | max | stddev
-  deriving Inhabited, BEq
+  deriving Repr, Inhabited
 
 -- | PRQL operation (single pipe stage)
 inductive Op where
