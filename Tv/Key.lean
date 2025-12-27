@@ -64,9 +64,9 @@ inductive PureKey where
   | colJump (idx : DispIdx)
   -- view transforms
   | asc | desc | D | I | dup | swap
-  | bang | spc | incDec (inc : Bool) | quit | esc
+  | bang | spc | incDec (inc : Bool) | q | esc
   -- views (push new view)
-  | freq | lr | pushFilter (expr : String) | selectCols (cols : Array String)
+  | F | r | pushFilter (expr : String) | selectCols (cols : Array String)
   | pushMeta (metaTbl : SomeTable) | pushFreqFilter (expr : String) (parentQuery : Prql.Query)
   | pushFld (path : String) (name : String) | pushSource (cmd : String) | pushFile (path : String)
   -- input modes
@@ -242,14 +242,14 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .bang => s.setCur (toggleKeyCols c.v c.di)
   | _, .spc => s.setCur (toggleSel c)
   | _, .incDec inc => s.setCur (adjDecimals c.v inc)
-  | _, .quit => quitOrPop s
+  | _, .q => quitOrPop s
   | _, .esc => clearSel c.v |>.map s.setCur |>.getD s
   -- push views (freq: add curCol only if not already in keyCols)
-  | _, .freq => let cur := curColName c
+  | _, .F => let cur := curColName c
                 let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
                 let colStr := cols.join ","
                 s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
-  | _, .lr => s.push ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, #[], #[], none, defDecimals⟩
+  | _, .r => s.push ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
   | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
   | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
