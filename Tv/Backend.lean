@@ -31,10 +31,10 @@ def parseCell (s : String) : Cell :=
 def saveMetaCache (path : String) (st : SomeTable) : IO Unit := do
   let cachePath := metaCachePath path
   let tbl := st.table
-  let colNames := tbl.colNames.toList |> String.intercalate "\t"
-  let rows := (List.range st.nRows).map fun r =>
-    tbl.colNames.toList.map (fun c => serializeCell (tbl.get r c)) |> String.intercalate "\t"
-  let content := colNames :: rows |> String.intercalate "\n"
+  let colNames := tbl.colNames.join "\t"
+  let rows := (Array.range st.nRows).map fun r =>
+    (tbl.colNames.map fun c => serializeCell (tbl.get r c)).join "\t"
+  let content := (#[colNames] ++ rows).join "\n"
   IO.FS.writeFile cachePath content
 
 -- | Load meta table from cache file (returns none if missing/invalid)
@@ -116,20 +116,20 @@ def createSource (path : String) : IO Unit := do
   let lines := out.stdout.splitOn "\n" |>.filter (!·.isEmpty) |> (if hasHeader then (·.drop 1) else id)
   if lines.isEmpty then return ()
   -- Build INSERT statements
-  let colList := cols.splitOn ","
-  let mut vals : List String := []
+  let colArr := cols.splitOn "," |>.toArray
+  let mut vals : Array String := #[]
   for line in lines do
     -- try tab first (find -printf), fall back to space (ls, ps, df)
     let parts := let ts := line.splitOn "\t"
-                 if ts.length > 1 then ts else line.splitOn " " |>.filter (!·.isEmpty)
+                 if ts.length > 1 then ts.toArray else line.splitOn " " |>.filter (!·.isEmpty) |>.toArray
     let escaped := parts.map (fun s => "'" ++ s.replace "'" "''" ++ "'")
     -- Pad or truncate to match column count
-    let padded := escaped ++ List.replicate (colList.length - escaped.length) "''"
-    vals := vals ++ [s!"({String.intercalate ", " (padded.take colList.length)})"]
-  let createSql := s!"CREATE OR REPLACE TABLE tv_source ({cols.splitOn "," |>.map (· ++ " VARCHAR") |> String.intercalate ", "})"
+    let padded := escaped ++ Array.replicate (colArr.size - escaped.size) "''"
+    vals := vals.push s!"({(padded.extract 0 colArr.size).join ", "})"
+  let createSql := s!"CREATE OR REPLACE TABLE tv_source ({(colArr.map (· ++ " VARCHAR")).join ", "})"
   let _ ← Adbc.query createSql
-  if vals.length > 0 then
-    let insertSql := s!"INSERT INTO tv_source VALUES {String.intercalate ", " vals}"
+  if vals.size > 0 then
+    let insertSql := s!"INSERT INTO tv_source VALUES {vals.join ", "}"
     let _ ← Adbc.query insertSql
   return ()
 
@@ -197,7 +197,7 @@ def timestamp : IO String := do
   let m := (s % 3600) / 60
   let sec := s % 60
   let milli := ms % 1000
-  let d2 := fun n : Nat => String.ofList [Char.ofNat (48 + n / 10), Char.ofNat (48 + n % 10)]
+  let d2 := fun n : Nat => s!"{Char.ofNat (48 + n / 10)}{Char.ofNat (48 + n % 10)}"
   pure s!"{h}:{d2 m}:{d2 sec}.{milli}"
 
 -- | Log to /tmp/tv.log
@@ -272,7 +272,7 @@ def queryRow (prql : String) (path : String) (row : Nat) (ncols : Nat) : IO (Exc
 
 -- | Query all distinct values for a column (for fzf picker)
 -- | No limit - distinct values bounded by column cardinality
-def queryDistinct (prql : String) (path : String) (col : String) : IO (Except String (List String)) := do
+def queryDistinct (prql : String) (path : String) (col : String) : IO (Except String (Array String)) := do
   let distinctPrql := prql ++ " | select {" ++ col ++ "} | group {" ++ col ++ "} (take 1)"
   logPrql distinctPrql
   if isSource path then createSource path
@@ -282,7 +282,7 @@ def queryDistinct (prql : String) (path : String) (col : String) : IO (Except St
     let sql := replaceDf sql (fileExpr path)
     try
       let st ← execSql sql
-      return .ok ((List.range st.nRows).map fun r => toString (st.table.getIdx r 0))
+      return .ok ((Array.range st.nRows).map fun r => toString (st.table.getIdx r 0))
     catch e =>
       return .error s!"SQL error: {e}"
 
@@ -321,7 +321,7 @@ def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := 
     let typeSchemaPrql := prql ++ " | take 1"
     let mut types : Array String := #[]
     match ← compilePrql typeSchemaPrql with
-    | .error _ => types := (List.replicate colNames.size "?").toArray
+    | .error _ => types := Array.replicate colNames.size "?"
     | .ok sql =>
       let sql := replaceDf sql (fileExpr path)
       try
@@ -330,7 +330,7 @@ def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := 
         for c in [:nc.toNat] do
           let fmt ← Adbc.colFmt qr c.toUInt64
           types := types.push (fmtToType (fmtChar fmt))
-      catch _ => types := (List.replicate colNames.size "?").toArray
+      catch _ => types := Array.replicate colNames.size "?"
     -- Query stats for each column
     let mut rows : Array (Array Cell) := #[]
     for i in [:colNames.size] do

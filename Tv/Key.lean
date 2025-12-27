@@ -306,7 +306,7 @@ def buildFilterExpr (col : String) (vals : Array String) (result : String) : Str
 -- | \ - filter with fzf
 def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
-  let vals ← Backend.queryDistinct c.v.query.render c.v.path col |>.map (·.toOption.getD [] |>.toArray)
+  let vals ← Backend.queryDistinct c.v.query.render c.v.path col |>.map (·.toOption.getD #[])
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
   (← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode)
     |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)

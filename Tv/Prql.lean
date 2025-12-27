@@ -1,10 +1,7 @@
 /-
   Type-safe PRQL statement constructor
 -/
-
--- | Join array of strings with separator
-def Array.join (arr : Array String) (sep : String) : String :=
-  String.intercalate sep arr.toList
+import Tv.Types
 
 namespace Prql
 

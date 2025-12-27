@@ -15,6 +15,10 @@ def Array.getDisp (arr : Array α) (idx : DispIdx) (default : α) : α :=
 def Array.findDispIdx? (arr : Array α) (p : α → Bool) : Option DispIdx :=
   arr.findIdx? p |>.map (⟨·⟩)
 
+-- | Join array of strings with separator
+def Array.join (arr : Array String) (sep : String) : String :=
+  String.intercalate sep arr.toList
+
 -- | Cell value (sum type)
 inductive Cell where
   | null
