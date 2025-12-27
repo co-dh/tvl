@@ -286,7 +286,7 @@ theorem isFullNull_50 : isFullNull "50%" = false := rfl
 
 -- | @ - column jump with fzf
 def atSign (c : KeyCtx) (s : State) : KeyResult :=
-  runFzfIdx ["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames)
+  fzfIdx ["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames) s.testMode
     <&> (·.map (fun idx => runKey c (.colJump idx) s) |>.getD s)
 
 -- | Build filter expression from fzf result
@@ -306,15 +306,14 @@ def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
   let vals ← Backend.queryDistinct c.v.query.render c.v.path col |>.map (·.toOption.getD [])
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
-  (← runFzf ["--print-query", "--prompt=" ++ prompt] (String.intercalate "\n" vals))
+  (← fzf ["--print-query", "--prompt=" ++ prompt] (String.intercalate "\n" vals) s.testMode)
     |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
     |>.map (fun expr => runKey c (.pushFilter expr) s) |>.getD s |> pure
 
 -- | s - select columns
 def sel (c : KeyCtx) (s : State) : KeyResult :=
-  if s.testMode then pure { s with inputMode := .selectCols, inputBuf := "" }
-  else runFzfMulti ["--prompt=Select: "] (c.di.colNames.toList |> String.intercalate "\n")
-         <&> fun cols => runKey c (.selectCols cols) s
+  fzfMulti ["--prompt=Select: "] (c.di.colNames.toList |> String.intercalate "\n") s.testMode
+    <&> fun cols => runKey c (.selectCols cols) s
 
 -- | M - meta view (works on any view)
 def M (c : KeyCtx) (s : State) : KeyResult :=
@@ -409,15 +408,13 @@ def parseAgg : String → Option Prql.Agg
   | "count" => some .count | "sum" => some .sum | "average" => some .avg
   | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
 
--- | Get agg functions: testMode -> [sum], else fzf multi-select
-def getAggFuncs (s : State) (keyNames aggNames : List String) : IO (List Prql.Agg) :=
-  if s.testMode then pure [Prql.Agg.sum]
-  else do
-    let keysStr := String.intercalate "," keyNames
-    let colsStr := String.intercalate "," aggNames
-    let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
-    let names ← runFzfMulti ["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev"
-    pure (names.filterMap parseAgg)
+-- | Get agg functions via fzf multi-select
+def getAggFuncs (s : State) (keyNames aggNames : List String) : IO (List Prql.Agg) := do
+  let keysStr := String.intercalate "," keyNames
+  let colsStr := String.intercalate "," aggNames
+  let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
+  let names ← fzfMulti ["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev" s.testMode
+  pure (names.filterMap parseAgg)
 
 -- | b - aggregate by key columns
 def b (c : KeyCtx) (s : State) : KeyResult := do
@@ -432,22 +429,19 @@ def b (c : KeyCtx) (s : State) : KeyResult := do
       let funcs ← getAggFuncs s keyNames aggNames
       pure (if funcs.isEmpty then s else runKey c (.pushAgg keyNames funcs aggNames) s)
 
--- | Get source command: testMode -> inputCmd, else fzf -> pushSource
-def getSource (s : State) : IO (Option PureKey) :=
-  if s.testMode then pure (some .inputCmd)
-  else runFzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" <&> (·.map .pushSource)
-
--- | : - command mode
+-- | : - command mode (fzf select source)
 def colon (c : KeyCtx) (s : State) : KeyResult :=
-  getSource s <&> (·.map (runKey c · s) |>.getD s)
+  fzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" s.testMode
+    <&> (·.map (fun cmd => runKey c (.pushSource cmd) s) |>.getD s)
 
--- | ^ - rename column (pure: inputRename in runKey, testMode only for now)
+-- | ^ - rename column
 def caret (c : KeyCtx) (s : State) : KeyResult :=
-  pure (if s.testMode then runKey c .inputRename s else s)
+  pure (runKey c .inputRename s)
 
--- | L - load file (IO: fzf, pure: pushFile in runKey)
+-- | L - load file
 def L (c : KeyCtx) (s : State) : KeyResult :=
-  runFzf ["--prompt=Load: "] "" <&> fun r => r.map (fun p => runKey c (.pushFile p) s) |>.getD s
+  fzf ["--prompt=Load: "] "" s.testMode
+    <&> (·.map (fun p => runKey c (.pushFile p) s) |>.getD s)
 
 end Key
 

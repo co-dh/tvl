@@ -1,32 +1,48 @@
 /-
   Fzf: helpers for running fzf picker and bat viewer
+  All fzf functions take testMode: if true, return first/default without spawning fzf
 -/
 import Tv.Term
 import Tv.Types
 
 namespace App
 
--- | Run fzf picker (suspends terminal, shows screen buffer at top)
-def runFzf (opts : List String) (input : String) (header : String := "") : IO (Option String) := do
-  -- capture screen buffer before shutdown
-  let screen ← if header.isEmpty then Term.bufferStr else pure header
-  Term.shutdown
-  -- print captured screen at top
-  IO.print screen
-  let child ← IO.Process.spawn {
-    cmd := "fzf"
-    args := ("--height=50%" :: "--layout=reverse" :: opts).toArray
-    stdin := .piped
-    stdout := .piped
-  }
-  child.stdin.putStr input
-  child.stdin.flush
-  let (_, child') ← child.takeStdin
-  let out ← child'.stdout.readToEnd
-  let _ ← child'.wait
-  let _ ← Term.init
-  let result := out.trim
-  return if result.isEmpty then none else some result
+-- | Core fzf: testMode returns first line, else spawn fzf
+private def fzfCore (opts : List String) (input : String) (testMode : Bool) : IO String :=
+  if testMode then pure (input.splitOn "\n" |>.filter (!·.isEmpty) |>.headD "")
+  else do
+    Term.shutdown
+    let args := ("--height=50%" :: "--layout=reverse" :: opts).toArray
+    let child ← IO.Process.spawn { cmd := "fzf", args, stdin := .piped, stdout := .piped }
+    child.stdin.putStr input
+    child.stdin.flush
+    let (_, child') ← child.takeStdin
+    let out ← child'.stdout.readToEnd
+    let _ ← child'.wait
+    let _ ← Term.init
+    pure out.trim
+
+-- | Single select
+def fzf (opts : List String) (input : String) (testMode : Bool := false) : IO (Option String) := do
+  let out ← fzfCore opts input testMode
+  pure (if out.isEmpty then none else some out)
+
+-- | Multi select. testMode: first line as singleton.
+def fzfMulti (opts : List String) (input : String) (testMode : Bool := false) : IO (List String) := do
+  let out ← fzfCore ("-m" :: opts) input testMode
+  pure (if testMode then (if out.isEmpty then [] else [out])
+        else out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty))
+
+-- | Index select. testMode: ⟨0⟩.
+def fzfIdx (opts : List String) (items : Array String) (testMode : Bool := false) : IO (Option DispIdx) :=
+  if testMode then pure (if items.isEmpty then none else some ⟨0⟩)
+  else do
+    let numbered := items.mapIdx fun i s => s!"{i}\t{s}"
+    let out ← fzfCore ("--with-nth=2.." :: opts) (String.intercalate "\n" numbered.toList) false
+    if out.isEmpty then return none
+    match out.splitOn "\t" |>.head? |>.bind String.toNat? with
+    | some n => return some ⟨n⟩
+    | none => return none
 
 -- | Run bat to display file (suspends terminal)
 def runBat (path : String) : IO Unit := do
@@ -38,44 +54,5 @@ def runBat (path : String) : IO Unit := do
     stdout := .inherit
   } >>= (·.wait)
   let _ ← Term.init
-
--- | Run fzf with numbered items, return selected index
-def runFzfIdx (opts : List String) (items : Array String) : IO (Option DispIdx) := do
-  Term.shutdown
-  let numbered := items.mapIdx fun i s => s!"{i}\t{s}"
-  let child ← IO.Process.spawn {
-    cmd := "fzf"
-    args := ("--with-nth=2.." :: "--height=50%" :: "--layout=reverse" :: opts).toArray
-    stdin := .piped
-    stdout := .piped
-  }
-  child.stdin.putStr (String.intercalate "\n" numbered.toList)
-  child.stdin.flush
-  let (_, child') ← child.takeStdin
-  let out ← child'.stdout.readToEnd
-  let _ ← child'.wait
-  let _ ← Term.init
-  let line := out.trim
-  if line.isEmpty then return none
-  match line.splitOn "\t" |>.head? |>.bind String.toNat? with
-  | some n => return some ⟨n⟩
-  | none => return none
-
--- | Run fzf multi-select
-def runFzfMulti (opts : List String) (input : String) : IO (List String) := do
-  Term.shutdown
-  let child ← IO.Process.spawn {
-    cmd := "fzf"
-    args := ("-m" :: opts).toArray
-    stdin := .piped
-    stdout := .piped
-  }
-  child.stdin.putStr input
-  child.stdin.flush
-  let (_, child') ← child.takeStdin
-  let out ← child'.stdout.readToEnd
-  let _ ← child'.wait
-  let _ ← Term.init
-  return out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty)
 
 end App
