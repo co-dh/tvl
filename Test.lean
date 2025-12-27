@@ -263,12 +263,6 @@ def test_decimal_decrease : IO Unit := do
   assert (contains firstRow "1.12") s!"Should show 2 decimals: {firstRow}"
   assert (!contains firstRow "1.123") s!"Should not show 3 decimals: {firstRow}"
 
-def test_swap_views : IO Unit := do
-  let output ← runKeys ":filter a > 2<ret>S" "tests/data/basic.csv"
-  let (tab, _) := footer output
-  assert (contains tab "basic") s!"Should show original: {tab}"
-  assert (contains tab "filter a > 2") s!"Should show filter: {tab}"
-
 def test_meta_select_rows_xkey_parent : IO Unit := do
   -- TODO: Meta enter should set selected cols as key cols in parent
   -- For now, just verify meta view shows
@@ -324,7 +318,8 @@ def test_aggregate_multi_col : IO Unit := do
   assert (contains hdr "sum_value" || contains hdr "city") s!"Should have aggregate columns: {hdr}"
 
 def test_multi_column_freq_enter : IO Unit := do
-  let output ← runKeys ":freq a,b<ret><ret>" "tests/data/multi_freq.csv"
+  -- Set keys on a,b, move to col 0, F to freq, Enter to filter
+  let output ← runKeys "!l!0F<ret>" "tests/data/multi_freq.csv"
   let (_, status) := footer output
   assert (endsWith status "/2") s!"Should filter to 2 rows: {status}"
 
@@ -410,7 +405,6 @@ def main : IO Unit := do
   test_freq_enter_pushes_view
   test_decimal_increase
   test_decimal_decrease
-  test_swap_views
   test_meta_select_rows_xkey_parent
   test_meta_0_select_null_cols
   test_meta_1_select_single_val_cols

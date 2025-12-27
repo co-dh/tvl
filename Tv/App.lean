@@ -17,8 +17,8 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
   match s.inputMode with
   | .selectCols =>
     if ev.key == Term.keyEnter || ev.ch == 13 then
-      let cols := s.inputBuf.splitOn "," |>.map String.trim |>.filter (!·.isEmpty)
-      if cols.length > 0 then
+      let cols := s.inputBuf.splitOn "," |>.map String.trim |>.filter (!·.isEmpty) |>.toArray
+      if cols.size > 0 then
         return some { s.setCur (v.copy (query := v.query.select cols)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
@@ -28,7 +28,7 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       let newName := s.inputBuf.trim
       if !newName.isEmpty then
         let oldName := di.colNames.getDisp v.nav.colCur "?"
-        let newCols := di.colNames.toList.map fun n => if n == oldName then newName else n
+        let newCols := di.colNames.map fun n => if n == oldName then newName else n
         let query := v.query.derive1 newName (Prql.quote oldName) |>.select newCols
         return some { s.setCur (v.copy (query := query)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
@@ -46,13 +46,13 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let cmd := s.inputBuf.trim
       if cmd.startsWith "freq " then
-        let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim
+        let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim |>.toArray
         let nav : PureState := { keyCols := cols }
-        let fv : View := ⟨v.path, v.query.freq cols, s!"freq {String.intercalate "," cols}", nav, .freqV (String.intercalate "," cols), none, [], [], none, 3⟩
+        let fv : View := ⟨v.path, v.query.freq cols, s!"freq {cols.join ","}", nav, .freqV (cols.join ","), none, #[], #[], none, 3⟩
         return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
-        let lrv : View := ⟨s!"source:lr:{dir}", {}, s!"lr {dir}", {}, .tbl, none, [], [], none, 3⟩
+        let lrv : View := ⟨s!"source:lr:{dir}", {}, s!"lr {dir}", {}, .tbl, none, #[], #[], none, 3⟩
         return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
@@ -145,13 +145,13 @@ partial def loop (s : State) : IO Unit := do
     Term.shutdown
     return ()
   -- get next event: from buffer or poll
-  let (ev, s) ← match s.keys with
-    | c :: rest =>
-      let ev : Term.Event := ⟨Term.eventKey, 0, 0, c.toNat.toUInt32, 0, 0⟩
-      pure (ev, { s with keys := rest })
-    | [] =>
-      let ev ← Term.pollEvent
-      pure (ev, s)
+  let (ev, s) ← if h : s.keys.size > 0 then
+    let c := s.keys[0]
+    let ev : Term.Event := ⟨Term.eventKey, 0, 0, c.toNat.toUInt32, 0, 0⟩
+    pure (ev, { s with keys := s.keys.extract 1 s.keys.size })
+  else
+    let ev ← Term.pollEvent
+    pure (ev, s)
   -- handleKey gets DisplayInfo only - no cell access possible
   let s' ← if ev.type == Term.eventKey then handleKey s di ev h.toNat w.toNat else pure s
   loop s'
@@ -167,8 +167,8 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
   if r < 0 then
     Backend.logError "Failed to init terminal"
     return
-  let v : View := ⟨path, {}, "", {}, .tbl, none, [], [], none, 3⟩
-  let s : State := { curView := v, keys := keys.toList, testMode := testMode }
+  let v : View := ⟨path, {}, "", {}, .tbl, none, #[], #[], none, 3⟩
+  let s : State := { curView := v, keys := keys.toList.toArray, testMode := testMode }
   loop s
   Backend.shutdown
   Term.shutdown

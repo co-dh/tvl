@@ -28,10 +28,10 @@ def fzf (opts : List String) (input : String) (testMode : Bool := false) : IO (O
   pure (if out.isEmpty then none else some out)
 
 -- | Multi select. testMode: first line as singleton.
-def fzfMulti (opts : List String) (input : String) (testMode : Bool := false) : IO (List String) := do
+def fzfMulti (opts : List String) (input : String) (testMode : Bool := false) : IO (Array String) := do
   let out ← fzfCore ("-m" :: opts) input testMode
-  pure (if testMode then (if out.isEmpty then [] else [out])
-        else out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty))
+  pure (if testMode then (if out.isEmpty then #[] else #[out])
+        else out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty) |>.toArray)
 
 -- | Index select. testMode: ⟨0⟩.
 def fzfIdx (opts : List String) (items : Array String) (testMode : Bool := false) : IO (Option DispIdx) :=
