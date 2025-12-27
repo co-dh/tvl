@@ -207,3 +207,8 @@ def Table.info (t : Table n) : DisplayInfo :=
 -- | INVARIANT: handleKey receives DisplayInfo, not Table.
 -- | This makes it impossible to access cell data outside rendering.
 -- | Enforcement: handleKey signature takes DisplayInfo, not Table.
+
+-- | Source path prefixes
+def srcPfx : String := "source:"    -- base prefix
+def srcLs  : String := "source:ls:" -- ls command
+def srcLr  : String := "source:lr:" -- lr command

@@ -295,7 +295,7 @@ def shortenPrql (prql : String) : String :=
 
 -- | Shorten path for display (strip source: prefix)
 def shortenPath (p : String) : String :=
-  if p.startsWith "source:" then p.drop 7 else p
+  if p.startsWith srcPfx then p.drop srcPfx.length else p
 
 -- | Render tab line: view1 | view2 | ... (all views on stack)
 def tabLine (views : Array (String × String × String)) (y : UInt32) (screenW : Nat) : IO Unit := do

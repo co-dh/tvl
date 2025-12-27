@@ -347,7 +347,7 @@ def retFld (c : KeyCtx) (s : State) : KeyResult := do
     let name := match vals.getD lsColName .null with | .str str => str | _ => ""
     if name.isEmpty then pure s
     else
-      let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
+      let baseDir := c.v.path.drop srcLs.length
       let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
       if perms.startsWith "d" then pure (runKey c (.pushFld fullPath name) s)
       else runBat fullPath *> pure s
@@ -403,8 +403,8 @@ def ret (c : KeyCtx) (s : State) : KeyResult :=
   match c.v.vkind with
   | .freqV colNames => retFreq c colNames s
   | .tbl =>
-    if c.v.path.startsWith "source:ls" then retFld c s
-    else if c.v.path.startsWith "source:lr" then retLr c s
+    if c.v.path.startsWith srcLs then retFld c s
+    else if c.v.path.startsWith srcLr then retLr c s
     else pure (runKey c .ret s)
   | .colMeta => pure (runKey c .ret s)
   | .fld => retFld c s

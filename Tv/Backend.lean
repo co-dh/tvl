@@ -94,15 +94,15 @@ def fileExpr (path : String) : String :=
   if path.endsWith ".parquet" then s!"read_parquet('{path}')"
   else if path.endsWith ".csv" || path.endsWith ".csv.gz" then s!"read_csv('{path}')"
   else if path.endsWith ".json" then s!"read_json('{path}')"
-  else if path.startsWith "source:" then "tv_source"
+  else if path.startsWith srcPfx then "tv_source"
   else s!"'{path}'"
 
 -- | Check if path is a system source
-def isSource (path : String) : Bool := path.startsWith "source:"
+def isSource (path : String) : Bool := path.startsWith srcPfx
 
 -- | Create source table in DuckDB
 def createSource (path : String) : IO Unit := do
-  let src := path.drop 7  -- remove "source:"
+  let src := path.drop srcPfx.length
   let (cmd, args, cols) := match src with
     | "ls" => ("ls", #["-la", "--time-style=+%Y-%m-%d_%H:%M"], "permissions,links,owner,grp,size,datetime,name")
     | "ps" => ("ps", #["aux"], "user,pid,cpu,mem,vsz,rss,tty,stat,start,time,command")
