@@ -14,17 +14,6 @@ abbrev ColPos := Nat × Nat × Nat
 
 /-! ## Pure Visibility Model -/
 
--- | Count visible columns from offset (how many fit on screen)
-def visColCount (widths : Array Nat) (screenW offset : Nat) : Nat :=
-  let nCols := widths.size
-  let rec go (i w : Nat) : Nat :=
-    if i >= nCols then i - offset
-    else
-      let colW := widths.getD i 10 + 1
-      if w + colW > screenW then i - offset
-      else go (i + 1) (w + colW)
-  if offset >= nCols then 0 else go offset 0
-
 -- | Is cursor row visible?
 def rowVisibleP (cursor visRows : Nat) : Bool :=
   let startRow := if cursor < visRows then 0 else cursor - visRows + 1
@@ -137,10 +126,6 @@ def visibleRange (widths : Array Nat) (offset cursor screenW : Nat) (keyColIdxs 
   let order := displayOrder keyColIdxs widths.size
   -- offset is already correct from adjustOffset (in display order space)
   ⟨buildCols widths order offset screenW, offset, cursor⟩
-
--- | Compute visible range from key column names
-def visibleRangeN (widths : Array Nat) (offset cursor screenW : Nat) (keyCols : List String) (colNames : Array String) : VisRange :=
-  visibleRange widths offset cursor screenW (resolveKeyCols keyCols colNames)
 
 -- | Theorem: visible columns have key columns first (empty keyCols)
 theorem visibleRange_keysFirst_empty (widths : Array Nat) (cursor screenW : Nat) :

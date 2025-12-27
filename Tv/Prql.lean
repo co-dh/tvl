@@ -106,7 +106,6 @@ def Query.select (q : Query) (cols : List String) : Query := q.pipe (.sel cols)
 def Query.exclude (q : Query) (cols : List String) : Query := q.pipe (.excl cols)
 def Query.derive1 (q : Query) (name expr : String) : Query := q.pipe (.derive [(name, expr)])
 def Query.freq (q : Query) (col : String) : Query := q.pipe (.freq col)
-def Query.take (q : Query) (n : Nat) : Query := q.pipe (.take n)
 
 -- | Frequency query with percentage bar (common pattern)
 def Query.freqFull (q : Query) (cols : List String) : Query :=

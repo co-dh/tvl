@@ -123,10 +123,6 @@ def curColName (c : KeyCtx) : String :=
   let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
   dispCols.getDisp c.v.nav.colCur "?"
 
--- | Get column index at current cursor (display) position
-def curColIdx (c : KeyCtx) : Nat :=
-  Render.colIndex (curColName c) c.di.colNames
-
 namespace Key
 
 -- | Navigation handlers use runNav with pure handleNav
@@ -515,9 +511,6 @@ def esc (c : KeyCtx) : KeyResult := do
   if !c.v.selCols.isEmpty then pure (c.s.setCur { c.v with selCols := [] })
   else if !c.v.selRows.isEmpty then pure (c.s.setCur { c.v with selRows := [] })
   else pure c.s
-
--- | Ctrl-C - quit
-def ctrlC (_ : KeyCtx) (s : State) : KeyResult := pure { s with quit := true }
 
 end Key
 
