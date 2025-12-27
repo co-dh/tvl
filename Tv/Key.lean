@@ -60,15 +60,16 @@ structure KeyCtx where
 -- | Key handler result
 abbrev KeyResult := IO State
 
-/-! ## Navigation -/
+/-! ## Pure keys (no IO) -/
 
--- | Navigation keys (pure, no IO)
-inductive NavKey where
-  | j | k | l | h        -- arrows
-  | g | G                -- home/end row
-  | zero | dollar        -- first/last col
-  | ctrlD | ctrlU        -- page down/up
-  | retMeta (sel : List String)  -- return from meta with selected col names as keys
+-- | All pure key operations
+inductive PureKey where
+  -- navigation
+  | j | k | l | h | g | G | zero | dollar | ctrlD | ctrlU
+  | retMeta (sel : List String)
+  -- view transforms
+  | sortAsc | sortDesc | del | toggleInfo | dup | swap
+  | toggleKey | toggleSel | incDec (inc : Bool) | quit | clearSel
 
 -- | Count visible columns from display position offset
 def visColCount (dispCols : Array String) (colNames : Array String) (widths : Array Nat) (screenW offset : Nat) : Nat :=
@@ -90,33 +91,6 @@ def adjustColOff (colOff colCur : Nat) (dispCols : Array String) (colNames : Arr
     if visCols == 0 then colCur
     else if colCur >= colOff + visCols then colCur - visCols + 1  -- scroll right
     else colOff  -- already visible
-
--- | Pure navigation on PureState
--- nRows: total rows in table (for clamping row cursor)
--- nCols: total columns in display order (for clamping col cursor)
--- visRows: visible rows on screen (for Ctrl-D/U page jumps)
-def handleNav (s : PureState) (key : NavKey) (nRows nCols visRows : Nat) : PureState :=
-  let lastRow := if nRows > 0 then nRows - 1 else 0
-  let lastCol := if nCols > 0 then nCols - 1 else 0
-  match key with
-  | .j => { s with rowCur := min (s.rowCur + 1) lastRow }
-  | .k => { s with rowCur := s.rowCur - 1 }  -- saturating
-  | .l => { s with colCur := ⟨min (s.colCur.val + 1) lastCol⟩ }
-  | .h => { s with colCur := ⟨if s.colCur.val > 0 then s.colCur.val - 1 else 0⟩ }
-  | .g => { s with rowCur := 0 }
-  | .G => { s with rowCur := lastRow }
-  | .zero => { s with colCur := ⟨0⟩, colOff := ⟨0⟩ }
-  | .dollar => { s with colCur := ⟨lastCol⟩ }
-  | .ctrlD => { s with rowCur := min (s.rowCur + visRows) lastRow }
-  | .ctrlU => { s with rowCur := s.rowCur - min s.rowCur visRows }
-  | .retMeta sel => { s with keyCols := sel, colCur := ⟨0⟩, colOff := ⟨0⟩ }
-
--- | Run navigation and adjust offset
-def runNav (c : KeyCtx) (key : NavKey) : State :=
-  let nav' := handleNav c.v.nav key c.di.nRows c.di.nCols c.pg
-  let dispCols := Render.displayCols nav'.keyCols c.di.colNames
-  let newOff := adjustColOff nav'.colOff.val nav'.colCur.val dispCols c.di.colNames c.di.colWidths c.sw
-  c.s.setCur { c.v with nav := { nav' with colOff := ⟨newOff⟩ } }
 
 -- | Get column name at current cursor (display) position
 def curColName (c : KeyCtx) : String :=
@@ -189,17 +163,67 @@ def adjDecimals (v : View) (inc : Bool) : View :=
 def quitOrPop (s : State) : State :=
   if s.views.length > 1 then s.pop else { s with quit := true }
 
+-- | Run pure key and adjust offset if needed
+def runKey (c : KeyCtx) (key : PureKey) : State :=
+  let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
+  let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
+  let s := c.v.nav
+  -- navigation keys modify PureState
+  let nav' := match key with
+    | .j => { s with rowCur := min (s.rowCur + 1) lastRow }
+    | .k => { s with rowCur := s.rowCur - 1 }
+    | .l => { s with colCur := ⟨min (s.colCur.val + 1) lastCol⟩ }
+    | .h => { s with colCur := ⟨if s.colCur.val > 0 then s.colCur.val - 1 else 0⟩ }
+    | .g => { s with rowCur := 0 }
+    | .G => { s with rowCur := lastRow }
+    | .zero => { s with colCur := ⟨0⟩, colOff := ⟨0⟩ }
+    | .dollar => { s with colCur := ⟨lastCol⟩ }
+    | .ctrlD => { s with rowCur := min (s.rowCur + c.pg) lastRow }
+    | .ctrlU => { s with rowCur := s.rowCur - min s.rowCur c.pg }
+    | .retMeta sel => { s with keyCols := sel, colCur := ⟨0⟩, colOff := ⟨0⟩ }
+    | _ => s  -- non-nav keys don't modify nav
+  -- adjust offset for nav keys
+  let dispCols := Render.displayCols nav'.keyCols c.di.colNames
+  let newOff := adjustColOff nav'.colOff.val nav'.colCur.val dispCols c.di.colNames c.di.colWidths c.sw
+  let v' := { c.v with nav := { nav' with colOff := ⟨newOff⟩ } }
+  -- view/state transforms
+  match key with
+  | .sortAsc => c.s.setCur (sortBy v' (curColName c) true)
+  | .sortDesc => c.s.setCur (sortBy v' (curColName c) false)
+  | .del => match delCols v' c.di with | some v => c.s.setCur v | none => c.s
+  | .toggleInfo => { c.s with showInfo := !c.s.showInfo }
+  | .dup => c.s.dupView
+  | .swap => c.s.swapViews
+  | .toggleKey => c.s.setCur (toggleKeyCols v' c.di)
+  | .toggleSel => c.s.setCur (toggleSel v')
+  | .incDec inc => c.s.setCur (adjDecimals v' inc)
+  | .quit => quitOrPop c.s
+  | .clearSel => match clearSel v' with | some v => c.s.setCur v | none => c.s
+  | _ => c.s.setCur v'  -- nav keys just update view
+
 namespace Key
 
--- | Navigation handlers use runNav with pure handleNav
-def j (c : KeyCtx) : KeyResult := pure (runNav c .j)
-def k (c : KeyCtx) : KeyResult := pure (runNav c .k)
-def l (c : KeyCtx) : KeyResult := pure (runNav c .l)
-def h (c : KeyCtx) : KeyResult := pure (runNav c .h)
-def ctrlD (c : KeyCtx) : KeyResult := pure (runNav c .ctrlD)
-def ctrlU (c : KeyCtx) : KeyResult := pure (runNav c .ctrlU)
-def g (c : KeyCtx) : KeyResult := pure (runNav c .g)
-def G (c : KeyCtx) : KeyResult := pure (runNav c .G)
+-- | Pure key handlers (all use runKey)
+def j (c : KeyCtx) : KeyResult := pure (runKey c .j)
+def k (c : KeyCtx) : KeyResult := pure (runKey c .k)
+def l (c : KeyCtx) : KeyResult := pure (runKey c .l)
+def h (c : KeyCtx) : KeyResult := pure (runKey c .h)
+def ctrlD (c : KeyCtx) : KeyResult := pure (runKey c .ctrlD)
+def ctrlU (c : KeyCtx) : KeyResult := pure (runKey c .ctrlU)
+def g (c : KeyCtx) : KeyResult := pure (runKey c .g)
+def G (c : KeyCtx) : KeyResult := pure (runKey c .G)
+def lbrak (c : KeyCtx) : KeyResult := pure (runKey c .sortAsc)
+def rbrak (c : KeyCtx) : KeyResult := pure (runKey c .sortDesc)
+def D (c : KeyCtx) : KeyResult := pure (runKey c .del)
+def I (c : KeyCtx) : KeyResult := pure (runKey c .toggleInfo)
+def T (c : KeyCtx) : KeyResult := pure (runKey c .dup)
+def S (c : KeyCtx) : KeyResult := pure (runKey c .swap)
+def excl (c : KeyCtx) : KeyResult := pure (runKey c .toggleKey)
+def space (c : KeyCtx) : KeyResult := pure (runKey c .toggleSel)
+def dot (c : KeyCtx) : KeyResult := pure (runKey c (.incDec true))
+def comma (c : KeyCtx) : KeyResult := pure (runKey c (.incDec false))
+def q (c : KeyCtx) : KeyResult := pure (runKey c .quit)
+def esc (c : KeyCtx) : KeyResult := pure (runKey c .clearSel)
 
 -- | Check if null% is 100% (fully null column)
 def isFullNull (s : String) : Bool := s == "100%"
@@ -232,7 +256,7 @@ def zero (c : KeyCtx) : KeyResult := do
     match c.v.cache with
     | some st => pure (c.s.setCur { c.v with selRows := selectFullNull st })
     | none => pure c.s
-  | _ => pure (runNav c .zero)
+  | _ => pure (runKey c .zero)
 
 -- | 1 - meta: select rows with dist == 1 (single-value cols)
 def one (c : KeyCtx) : KeyResult := do
@@ -249,43 +273,7 @@ def one (c : KeyCtx) : KeyResult := do
   | _ => pure c.s  -- no-op for non-meta views
 
 -- | $ - last column
-def dollar (c : KeyCtx) : KeyResult := pure (runNav c .dollar)
-
--- | [ - sort ascending
-def lbrak (c : KeyCtx) : KeyResult := pure (c.s.setCur (sortBy c.v (curColName c) true))
-
--- | ] - sort descending
-def rbrak (c : KeyCtx) : KeyResult := pure (c.s.setCur (sortBy c.v (curColName c) false))
-
--- | D - delete column(s)
-def D (c : KeyCtx) : KeyResult := pure (match delCols c.v c.di with | some v => c.s.setCur v | none => c.s)
-
--- | I - toggle info overlay
-def I (c : KeyCtx) : KeyResult := pure { c.s with showInfo := !c.s.showInfo }
-
--- | T - duplicate view
-def T (c : KeyCtx) : KeyResult := pure c.s.dupView
-
--- | S - swap views
-def S (c : KeyCtx) : KeyResult := pure c.s.swapViews
-
--- | ! - toggle key column
-def excl (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleKeyCols c.v c.di))
-
--- | Space - toggle selection
-def space (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleSel c.v))
-
--- | . - increase decimals
-def dot (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v true))
-
--- | , - decrease decimals
-def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v false))
-
--- | q - quit/pop
-def q (c : KeyCtx) : KeyResult := pure (quitOrPop c.s)
-
--- | Esc - clear selections
-def esc (c : KeyCtx) : KeyResult := pure (match clearSel c.v with | some v => c.s.setCur v | none => c.s)
+def dollar (c : KeyCtx) : KeyResult := pure (runKey c .dollar)
 
 -- | @ - column jump with fzf (finds DispIdx in display order)
 def atSign (c : KeyCtx) : KeyResult := do
@@ -397,26 +385,30 @@ def retLr (c : KeyCtx) : KeyResult := do
       pure c.s
 
 -- | Theorem: j increments rowCur (clamped to lastRow)
-theorem handleNav_j_rowCur (s : PureState) (nRows nCols visRows : Nat) :
-    let lastRow := if nRows > 0 then nRows - 1 else 0
-    let s' := handleNav s .j nRows nCols visRows
-    s'.rowCur = min (s.rowCur + 1) lastRow := by simp [handleNav]
+theorem runKey_j_rowCur (c : KeyCtx) :
+    let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
+    let s' := runKey c .j
+    s'.curView.nav.rowCur = min (c.v.nav.rowCur + 1) lastRow := by
+  simp only [runKey, State.setCur]
 
 -- | Theorem: k decrements rowCur (saturating at 0)
-theorem handleNav_k_rowCur (s : PureState) (nRows nCols visRows : Nat) :
-    let s' := handleNav s .k nRows nCols visRows
-    s'.rowCur = s.rowCur - 1 := by simp [handleNav]
+theorem runKey_k_rowCur (c : KeyCtx) :
+    let s' := runKey c .k
+    s'.curView.nav.rowCur = c.v.nav.rowCur - 1 := by
+  simp only [runKey, State.setCur]
 
 -- | Theorem: l increments colCur (clamped to lastCol)
-theorem handleNav_l_colCur (s : PureState) (nRows nCols visRows : Nat) :
-    let lastCol := if nCols > 0 then nCols - 1 else 0
-    let s' := handleNav s .l nRows nCols visRows
-    s'.colCur.val = min (s.colCur.val + 1) lastCol := by simp [handleNav]
+theorem runKey_l_colCur (c : KeyCtx) :
+    let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
+    let s' := runKey c .l
+    s'.curView.nav.colCur.val = min (c.v.nav.colCur.val + 1) lastCol := by
+  simp only [runKey, State.setCur]
 
 -- | Theorem: retMeta sets keyCols = sel, cursor = 0
-theorem handleNav_retMeta_cursor (s : PureState) (sel : List String) (nRows nCols visRows : Nat) :
-    let s' := handleNav s (.retMeta sel) nRows nCols visRows
-    s'.colCur.val = 0 ∧ s'.keyCols = sel := by simp [handleNav]
+theorem runKey_retMeta_cursor (c : KeyCtx) (sel : List String) :
+    let s' := runKey c (.retMeta sel)
+    s'.curView.nav.colCur.val = 0 ∧ s'.curView.nav.keyCols = sel := by
+  simp only [runKey, State.setCur]; trivial
 
 -- | Pure: pop meta view and set parent's keyCols
 def popMetaState (s : State) (selColNames : List String) : State :=
