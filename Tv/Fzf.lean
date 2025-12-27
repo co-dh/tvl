@@ -8,11 +8,11 @@ import Tv.Types
 namespace App
 
 -- | Core fzf: testMode returns first line, else spawn fzf
-private def fzfCore (opts : List String) (input : String) (testMode : Bool) : IO String :=
+private def fzfCore (opts : Array String) (input : String) (testMode : Bool) : IO String :=
   if testMode then pure (input.splitOn "\n" |>.filter (!·.isEmpty) |>.headD "")
   else do
     Term.shutdown
-    let args := ("--height=50%" :: "--layout=reverse" :: opts).toArray
+    let args := #["--height=50%", "--layout=reverse"] ++ opts
     let child ← IO.Process.spawn { cmd := "fzf", args, stdin := .piped, stdout := .piped }
     child.stdin.putStr input
     child.stdin.flush
@@ -23,22 +23,22 @@ private def fzfCore (opts : List String) (input : String) (testMode : Bool) : IO
     pure out.trim
 
 -- | Single select
-def fzf (opts : List String) (input : String) (testMode : Bool := false) : IO (Option String) := do
+def fzf (opts : Array String) (input : String) (testMode : Bool := false) : IO (Option String) := do
   let out ← fzfCore opts input testMode
   pure (if out.isEmpty then none else some out)
 
 -- | Multi select. testMode: first line as singleton.
-def fzfMulti (opts : List String) (input : String) (testMode : Bool := false) : IO (Array String) := do
-  let out ← fzfCore ("-m" :: opts) input testMode
+def fzfMulti (opts : Array String) (input : String) (testMode : Bool := false) : IO (Array String) := do
+  let out ← fzfCore (#["-m"] ++ opts) input testMode
   pure (if testMode then (if out.isEmpty then #[] else #[out])
         else out.splitOn "\n" |>.map String.trim |>.filter (!·.isEmpty) |>.toArray)
 
 -- | Index select. testMode: ⟨0⟩.
-def fzfIdx (opts : List String) (items : Array String) (testMode : Bool := false) : IO (Option DispIdx) :=
+def fzfIdx (opts : Array String) (items : Array String) (testMode : Bool := false) : IO (Option DispIdx) :=
   if testMode then pure (if items.isEmpty then none else some ⟨0⟩)
   else do
     let numbered := items.mapIdx fun i s => s!"{i}\t{s}"
-    let out ← fzfCore ("--with-nth=2.." :: opts) (String.intercalate "\n" numbered.toList) false
+    let out ← fzfCore (#["--with-nth=2.."] ++ opts) (numbered.join "\n") false
     if out.isEmpty then return none
     match out.splitOn "\t" |>.head? |>.bind String.toNat? with
     | some n => return some ⟨n⟩

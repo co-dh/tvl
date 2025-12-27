@@ -288,7 +288,7 @@ theorem isFullNull_50 : isFullNull "50%" = false := rfl
 
 -- | @ - column jump with fzf
 def atSign (c : KeyCtx) (s : State) : KeyResult :=
-  fzfIdx ["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames) s.testMode
+  fzfIdx #["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames) s.testMode
     <&> (·.map (fun idx => runKey c (.colJump idx) s) |>.getD s)
 
 -- | Build filter expression from fzf result
@@ -308,13 +308,13 @@ def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
   let vals ← Backend.queryDistinct c.v.query.render c.v.path col |>.map (·.toOption.getD [] |>.toArray)
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
-  (← fzf ["--print-query", "--prompt=" ++ prompt] (vals.toList |> String.intercalate "\n") s.testMode)
+  (← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode)
     |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
     |>.map (fun expr => runKey c (.pushFilter expr) s) |>.getD s |> pure
 
 -- | s - select columns
 def sel (c : KeyCtx) (s : State) : KeyResult :=
-  fzfMulti ["--prompt=Select: "] (c.di.colNames.toList |> String.intercalate "\n") s.testMode
+  fzfMulti #["--prompt=Select: "] (c.di.colNames.join "\n") s.testMode
     <&> fun cols => runKey c (.selectCols cols) s
 
 -- | M - meta view (works on any view)
@@ -419,7 +419,7 @@ def getAggFuncs (s : State) (keyNames aggNames : Array String) : IO (Array Prql.
   let keysStr := keyNames.join ","
   let colsStr := aggNames.join ","
   let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
-  let names ← fzfMulti ["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev" s.testMode
+  let names ← fzfMulti #["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev" s.testMode
   pure (names.filterMap parseAgg)
 
 -- | b - aggregate by key columns
@@ -437,7 +437,7 @@ def b (c : KeyCtx) (s : State) : KeyResult := do
 
 -- | : - command mode (fzf select source)
 def colon (c : KeyCtx) (s : State) : KeyResult :=
-  fzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" s.testMode
+  fzf #["--prompt=: "] "ps\nenv\ndf\nls\ntcp" s.testMode
     <&> (·.map (fun cmd => runKey c (.pushSource cmd) s) |>.getD s)
 
 -- | ^ - rename column
@@ -446,7 +446,7 @@ def caret (c : KeyCtx) (s : State) : KeyResult :=
 
 -- | L - load file
 def L (c : KeyCtx) (s : State) : KeyResult :=
-  fzf ["--prompt=Load: "] "" s.testMode
+  fzf #["--prompt=Load: "] "" s.testMode
     <&> (·.map (fun p => runKey c (.pushFile p) s) |>.getD s)
 
 end Key
