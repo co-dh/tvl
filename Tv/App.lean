@@ -117,7 +117,7 @@ partial def loop (s : State) : IO Unit := do
   let (v', tbl, fetchErr) ← v.fetch
   let s := { s.setCur v' with err := fetchErr }
   -- extract display info (only way to get metadata for handleKey)
-  let di := tbl.table.info
+  let di := tbl.info
   -- render based on view kind (tbl only used here for rendering)
   let w ← Term.width
   let h ← Term.height

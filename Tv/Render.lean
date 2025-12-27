@@ -31,9 +31,8 @@ theorem rowVisibleP_always (cursor visRows : Nat) (h : visRows > 0) :
 -- | Render header row with underline attribute (highlights selected columns)
 def header (st : SomeTable) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
            (selCols : Array String := #[]) : IO Unit := do
-  let colNames := st.table.colNames
   for (i, x, w) in cols do
-    let name := colNames.getD i ""
+    let name := st.colNames.getD i ""
     let isSel := selCols.contains name
     let (fg, bg) := if i == selCol then (Term.black, Term.cyan)
                     else if isSel then (Term.black, Term.magenta)
@@ -43,13 +42,12 @@ def header (st : SomeTable) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
 -- | Render single data row with decimal precision (highlights selected cols/rows)
 def row (st : SomeTable) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
         (y : UInt32) (selCols : Array String := #[]) (selRows : Array Nat := #[]) : IO Unit := do
-  let colNames := st.table.colNames
   let isCurRow := rowIdx == curRow
   let isSelRow := selRows.contains rowIdx
   for (i, x, w) in cols do
-    let cell := st.table.getIdx rowIdx i
+    let cell := st.getIdx rowIdx i
     let isCursor := isCurRow && i == curCol
-    let isSel := selCols.contains (colNames.getD i "")
+    let isSel := selCols.contains (st.colNames.getD i "")
     let (fg, bg) := if isCursor then (Term.black, Term.white)
                     else if isSelRow then (Term.black, Term.green)  -- selected row
                     else if isSel && isCurRow then (Term.black, Term.magenta)
@@ -220,8 +218,8 @@ def table (st : SomeTable) (nav : PureState) (screenH screenW : Nat)
           (decimals : Nat := 3)
           (selCols : Array String := #[]) (selRows : Array Nat := #[]) : IO (Nat × Array ColPos × Nat) := do
   Term.clear
-  let widths := st.table.colWidths
-  let colNames := st.table.colNames
+  let widths := st.colWidths
+  let colNames := st.colNames
   let keyIdxs := resolveKeyCols nav.keyCols colNames
   let curRow := nav.rowCur
   let colOff := nav.colOff.val

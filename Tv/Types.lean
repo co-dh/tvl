@@ -3,6 +3,7 @@
   Table stores columns by name (HashMap) for direct name-based access
 -/
 import Std.Data.HashMap
+import Tv.Adbc
 
 -- | Index into display order (keyCols first, then rest)
 structure DispIdx where val : Nat deriving Repr, Inhabited, BEq
@@ -133,92 +134,71 @@ instance : Ord Cell where compare := compare
 
 end Cell
 
--- | Sized array (array with type-level length proof)
-abbrev SizedArray (α : Type) (n : Nat) := { arr : Array α // arr.size = n }
-
--- | Column data with typed row count
-structure ColData (nRows : Nat) where
-  cells : SizedArray Cell nRows
-  width : Nat
-  deriving Repr
-
--- | Table with typed row count, columns in insertion order
-structure Table (nRows : Nat) where
-  cols : Array (String × ColData nRows)
-  deriving Repr
-
--- | Existential wrapper for tables with unknown row count
-structure SomeTable where
-  nRows : Nat
-  table : Table nRows
-
-namespace Table
--- | INVARIANT: Table is READ-ONLY for display. No client-side sorting, filtering,
--- | or aggregation (freq). All data transformations go through PRQL/Backend.
--- | Table only provides: cell access for rendering, column metadata for navigation.
-
-def nCols (t : Table n) : Nat := t.cols.size
-
--- | Get column names in order
-def colNames (t : Table n) : Array String := t.cols.map (·.1)
-
--- | Find column by name (linear scan, OK for <100 cols)
-def findCol (t : Table n) (name : String) : Option (ColData n) :=
-  t.cols.find? (·.1 == name) |>.map (·.2)
-
--- | Get cell at (row, colName)
-def get (t : Table n) (row : Nat) (name : String) : Cell :=
-  t.findCol name |>.map (·.cells.val.getD row .null) |>.getD .null
-
--- | Get cell at (row, colIdx) - for backwards compat
-def getIdx (t : Table n) (row col : Nat) : Cell :=
-  t.cols[col]? |>.map (·.2.cells.val.getD row .null) |>.getD .null
-
--- | Compute width for column (max of name and data, capped at 50)
-def calcWidth (name : String) (cells : Array Cell) : Nat :=
-  let hdrW := name.length
-  let dataW := cells.foldl (init := hdrW) fun acc c =>
-    max acc c.toString.length
-  min 50 dataW
-
--- | Create table from column names and row data (returns existential)
-def create (colNames : Array String) (rows : Array (Array Cell)) : SomeTable :=
-  let nRows := rows.size
-  -- transpose row-major to column-major
-  let cols := colNames.mapIdx fun i name =>
-    let cells := rows.map fun row => row.getD i .null
-    let width := calcWidth name cells
-    -- proof that cells.size = nRows
-    have h : cells.size = nRows := Array.size_map ..
-    (name, ColData.mk ⟨cells, h⟩ width)
-  ⟨nRows, ⟨cols⟩⟩
-
--- | Empty table
-def empty : Table 0 := ⟨#[]⟩
-
--- | Get all column widths in order
-def colWidths (t : Table n) : Array Nat :=
-  t.cols.map (·.2.width)
-
-end Table
-
--- | INVARIANT: Table is for rendering only. All data ops go through Backend.
--- | DisplayInfo exposes only metadata needed for navigation/PRQL building.
+-- | DisplayInfo: metadata for navigation/PRQL building (no cell access)
 structure DisplayInfo where
   colNames  : Array String
   colWidths : Array Nat
   nRows     : Nat
   nCols     : Nat
 
--- | Extract display info from table (only way to get metadata)
-def Table.info (t : Table n) : DisplayInfo :=
-  ⟨t.colNames, t.colWidths, n, t.nCols⟩
-
--- | INVARIANT: handleKey receives DisplayInfo, not Table.
--- | This makes it impossible to access cell data outside rendering.
--- | Enforcement: handleKey signature takes DisplayInfo, not Table.
-
 -- | Source path prefixes
 def srcPfx : String := "source:"    -- base prefix
 def srcLs  : String := "source:ls:" -- ls command
 def srcLr  : String := "source:lr:" -- lr command
+
+-- | Zero-copy table: data stays in Arrow/C memory, accessed via FFI
+structure SomeTable where
+  qr        : Adbc.QueryResult   -- arrow data (opaque, C memory)
+  colNames  : Array String       -- cached column names
+  colWidths : Array Nat          -- cached column widths
+  colFmts   : Array Char         -- cached format chars per column
+  nRows     : Nat
+  nCols     : Nat
+
+namespace SomeTable
+
+-- | Cap for column width
+def maxColWidth : Nat := 50
+
+-- | Build SomeTable from QueryResult (caches metadata, no cell copies)
+def ofQueryResult (qr : Adbc.QueryResult) : IO SomeTable := do
+  let nc ← Adbc.ncols qr
+  let nr ← Adbc.nrows qr
+  let mut names : Array String := #[]
+  let mut fmts : Array Char := #[]
+  for i in [:nc.toNat] do
+    let n ← Adbc.colName qr i.toUInt64
+    names := names.push n
+    let fmt ← Adbc.colFmt qr i.toUInt64
+    fmts := fmts.push (if h : fmt.length > 0 then fmt.toList[0] else '?')
+  let widths ← Adbc.colWidths qr
+  let widths := widths.map (min maxColWidth)
+  pure ⟨qr, names, widths, fmts, nr.toNat, nc.toNat⟩
+
+-- | Get cell at (row, col) - pure interface via unsafeIO
+@[inline] unsafe def getIdxImpl (t : SomeTable) (row col : Nat) : Cell :=
+  match unsafeIO (do
+    let isNull ← Adbc.cellIsNull t.qr row.toUInt64 col.toUInt64
+    if isNull then return Cell.null
+    let ch := t.colFmts.getD col '?'
+    match ch with
+    | 'l' | 'i' | 's' | 'c' => return Cell.int (← Adbc.cellInt t.qr row.toUInt64 col.toUInt64)
+    | 'g' | 'f' | 'd' => return Cell.float (← Adbc.cellFloat t.qr row.toUInt64 col.toUInt64)
+    | 'b' => return Cell.bool ((← Adbc.cellStr t.qr row.toUInt64 col.toUInt64) == "true")
+    | _ => return Cell.str (← Adbc.cellStr t.qr row.toUInt64 col.toUInt64)) with
+  | Except.ok c => c
+  | Except.error _ => Cell.null
+
+@[implemented_by getIdxImpl]
+def getIdx (t : SomeTable) (_ _ : Nat) : Cell := .null
+
+-- | Get DisplayInfo
+def info (t : SomeTable) : DisplayInfo :=
+  ⟨t.colNames, t.colWidths, t.nRows, t.nCols⟩
+
+-- | Empty table
+def empty : IO SomeTable := do
+  let qr ← Adbc.query "SELECT 1 WHERE 1=0"
+  ofQueryResult qr
+
+end SomeTable

@@ -42,7 +42,7 @@ structure View where
   disp     : String := ""        -- display name for tab
   nav      : PureState := {}     -- navigation state
   vkind    : ViewKind := .tbl
-  cache    : Option SomeTable := none
+  cache    : Option SomeTable := none  -- zero-copy cached query result
   selCols  : Array String := #[]   -- selected column names
   selRows  : Array Nat := #[]
   total    : Option Nat := none
@@ -122,7 +122,8 @@ def View.fetch (v : View) : IO (View × SomeTable × String) := do
     | .error e =>
       Backend.logError s!"Query error: {e}"
       let short := e.splitOn "───" |>.head? |>.getD e |>.take 80
-      return (v, ⟨0, Table.empty⟩, short)
+      let empty ← SomeTable.empty
+      return (v, empty, short)
 
 -- | Invalidate cache (after PRQL change)
 def View.invalidate (v : View) : View := { v with cache := none }

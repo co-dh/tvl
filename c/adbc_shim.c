@@ -639,3 +639,81 @@ lean_obj_res lean_qr_cell_is_null(b_lean_obj_arg qr_obj, uint64_t row, uint64_t 
 
     return lean_io_result_mk_ok(lean_box(is_null(arr, lr) ? 1 : 0));
 }
+
+// | Get string length of cell (for width calculation, no allocation)
+static size_t cell_str_len(QueryResult* qr, int64_t row, int64_t col) {
+    int64_t bi, lr;
+    if (!find_batch(qr, row, &bi, &lr)) return 0;
+    if (col >= qr->schema.n_children) return 0;
+
+    struct ArrowArray* batch = &qr->batches[bi];
+    struct ArrowArray* arr = batch->children[col];
+    const char* fmt = qr->schema.children[col]->format;
+
+    if (is_null(arr, lr)) return 0;
+
+    char buf[64];
+    if (fmt[0] == 'l') {  // int64
+        int64_t v = ((const int64_t*)arr->buffers[1])[arr->offset + lr];
+        return snprintf(buf, sizeof(buf), "%ld", v);
+    }
+    if (fmt[0] == 'i') {  // int32
+        int32_t v = ((const int32_t*)arr->buffers[1])[arr->offset + lr];
+        return snprintf(buf, sizeof(buf), "%d", v);
+    }
+    if (fmt[0] == 's') {  // int16
+        int16_t v = ((const int16_t*)arr->buffers[1])[arr->offset + lr];
+        return snprintf(buf, sizeof(buf), "%d", v);
+    }
+    if (fmt[0] == 'c') {  // int8
+        int8_t v = ((const int8_t*)arr->buffers[1])[arr->offset + lr];
+        return snprintf(buf, sizeof(buf), "%d", v);
+    }
+    if (fmt[0] == 'g') {  // float64
+        double v = ((const double*)arr->buffers[1])[arr->offset + lr];
+        return snprintf(buf, sizeof(buf), "%g", v);
+    }
+    if (fmt[0] == 'f') {  // float32
+        float v = ((const float*)arr->buffers[1])[arr->offset + lr];
+        return snprintf(buf, sizeof(buf), "%g", v);
+    }
+    if (fmt[0] == 'u' || fmt[0] == 'z') {  // utf8, binary
+        const int32_t* offsets = (const int32_t*)arr->buffers[1];
+        int64_t idx = arr->offset + lr;
+        return offsets[idx + 1] - offsets[idx];
+    }
+    if (fmt[0] == 'U' || fmt[0] == 'Z') {  // large utf8, large binary
+        const int64_t* offsets = (const int64_t*)arr->buffers[1];
+        int64_t idx = arr->offset + lr;
+        return offsets[idx + 1] - offsets[idx];
+    }
+    if (fmt[0] == 'b') return 5;  // "true" or "false"
+    if (fmt[0] == 'd') return 20; // decimal estimate
+    return 1;  // unknown
+}
+
+// | Get column widths (max of header and all cells, capped at 50)
+lean_obj_res lean_qr_col_widths(b_lean_obj_arg qr_obj, lean_obj_arg world) {
+    QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
+    int64_t nc = qr->schema.n_children;
+    int64_t nr = qr->total_rows;
+
+    // Alloc Lean array
+    lean_object* arr = lean_alloc_array(nc, nc);
+
+    for (int64_t c = 0; c < nc; c++) {
+        // Start with header width
+        const char* name = qr->schema.children[c]->name;
+        size_t w = name ? strlen(name) : 0;
+
+        // Scan all rows for max width
+        for (int64_t r = 0; r < nr; r++) {
+            size_t cw = cell_str_len(qr, r, c);
+            if (cw > w) w = cw;
+        }
+
+        lean_array_set_core(arr, c, lean_box(w));
+    }
+
+    return lean_io_result_mk_ok(arr);
+}

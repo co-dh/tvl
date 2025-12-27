@@ -293,7 +293,7 @@ def sel (c : KeyCtx) (s : State) : KeyResult :=
 
 -- | M - meta view (works on any view)
 def M (c : KeyCtx) (s : State) : KeyResult :=
-  Backend.queryMeta c.v.query.render c.v.path
+  Meta.queryMeta c.v.query.render c.v.path
     <&> fun r => r.toOption.map (fun t => runKey c (.pushMeta t) s) |>.getD s
 
 -- | ret on freqV: query row, call pure ret
