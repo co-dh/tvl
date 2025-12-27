@@ -258,18 +258,18 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .freq => let cur := curColName c
                 let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
                 let colStr := cols.join ","
-                s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, 3⟩
-  | _, .lr => s.push ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, #[], #[], none, 3⟩
+                s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
+  | _, .lr => s.push ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
   | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
-  | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, 3⟩
+  | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
   | _, .pushFreqFilter expr pq => s.push ⟨c.v.path, pq.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
-  | _, .pushFld path name => s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .tbl, none, #[], #[], none, 3⟩
-  | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, #[], #[], none, 3⟩
-  | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, #[], #[], none, 3⟩
+  | _, .pushFld path name => s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .tbl, none, #[], #[], none, defDecimals⟩
+  | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
+  | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
   | _, .inputCmd => { s with inputMode := .command, inputBuf := "" }
-  | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, #[], #[], none, 3⟩
+  | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .popMeta => if c.v.selRows.isEmpty then s
                    else c.v.cache.map (fun st => popMetaState s (metaSelNames st c.v.selRows)) |>.getD s
   -- ret: pure cases (colMeta -> popMeta, others -> no-op for pure, IO handled separately)
@@ -340,11 +340,11 @@ def retFreq (c : KeyCtx) (colNames : String) (s : State) : KeyResult :=
 
 -- | ret on folder (source:ls): enter folder or open file with bat
 def retFld (c : KeyCtx) (s : State) : KeyResult := do
-  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur 9 with
+  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur lsColCount with
   | .error _ => pure s
   | .ok vals =>
-    let perms := match vals.getD 0 .null with | .str str => str | _ => ""
-    let name := match vals.getD 8 .null with | .str str => str | _ => ""
+    let perms := match vals.getD lsColPerms .null with | .str str => str | _ => ""
+    let name := match vals.getD lsColName .null with | .str str => str | _ => ""
     if name.isEmpty then pure s
     else
       let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10

@@ -48,11 +48,11 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       if cmd.startsWith "freq " then
         let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim |>.toArray
         let nav : PureState := { keyCols := cols }
-        let fv : View := ⟨v.path, v.query.freq cols, s!"freq {cols.join ","}", nav, .freqV (cols.join ","), none, #[], #[], none, 3⟩
+        let fv : View := ⟨v.path, v.query.freq cols, s!"freq {cols.join ","}", nav, .freqV (cols.join ","), none, #[], #[], none, defDecimals⟩
         return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
-        let lrv : View := ⟨s!"source:lr:{dir}", {}, s!"lr {dir}", {}, .tbl, none, #[], #[], none, 3⟩
+        let lrv : View := ⟨s!"source:lr:{dir}", {}, s!"lr {dir}", {}, .tbl, none, #[], #[], none, defDecimals⟩
         return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
@@ -167,7 +167,7 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
   if r < 0 then
     Backend.logError "Failed to init terminal"
     return
-  let v : View := ⟨path, {}, "", {}, .tbl, none, #[], #[], none, 3⟩
+  let v : View := ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   let s : State := { curView := v, keys := keys.toList.toArray, testMode := testMode }
   loop s
   Backend.shutdown

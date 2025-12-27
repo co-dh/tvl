@@ -27,6 +27,14 @@ inductive ViewKind where
   | fld                    -- folder browser
   deriving Inhabited
 
+-- | Default decimal places for float display
+def defDecimals : Nat := 3
+
+-- | ls -l column indices (permissions, links, owner, group, size, month, day, time, name)
+def lsColCount : Nat := 9
+def lsColPerms : Nat := 0
+def lsColName  : Nat := 8
+
 -- | Single view with PRQL query
 structure View where
   path     : String              -- file path
@@ -38,7 +46,7 @@ structure View where
   selCols  : Array DispIdx := #[]  -- selected columns (display order)
   selRows  : Array Nat := #[]
   total    : Option Nat := none
-  decimals : Nat := 3
+  decimals : Nat := defDecimals
 
 -- | Pending input for interactive commands
 inductive InputMode where
