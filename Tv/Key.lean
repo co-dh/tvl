@@ -63,14 +63,14 @@ inductive PureKey where
   | j | k | l | h | g | G | _0 | _1 | dollar | c_d | c_u
   | colJump (idx : DispIdx)
   -- view transforms
-  | asc | desc | D | toggleInfo | dup | swap
-  | toggleKey | toggleSel | incDec (inc : Bool) | quit | clearSel
+  | asc | desc | D | I | dup | swap
+  | bang | spc | incDec (inc : Bool) | quit | esc
   -- views (push new view)
   | freq | lr | pushFilter (expr : String) | selectCols (cols : Array String)
   | pushMeta (metaTbl : SomeTable) | pushFreqFilter (expr : String) (parentQuery : Prql.Query)
   | pushFld (path : String) (name : String) | pushSource (cmd : String) | pushFile (path : String)
   -- input modes
-  | inputRename | inputCmd
+  | inputRename | colon
   -- agg
   | pushAgg (keys : Array String) (funcs : Array Prql.Agg) (cols : Array String)
   -- enter key (pure cases only)
@@ -236,14 +236,14 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .asc => s.setCur (sortBy c.v (curColName c) true)
   | _, .desc => s.setCur (sortBy c.v (curColName c) false)
   | _, .D => delCols c.v c.di |>.map s.setCur |>.getD s
-  | _, .toggleInfo => { s with showInfo := !s.showInfo }
+  | _, .I => { s with showInfo := !s.showInfo }
   | _, .dup => s.dupView
   | _, .swap => s.swapViews
-  | _, .toggleKey => s.setCur (toggleKeyCols c.v c.di)
-  | _, .toggleSel => s.setCur (toggleSel c)
+  | _, .bang => s.setCur (toggleKeyCols c.v c.di)
+  | _, .spc => s.setCur (toggleSel c)
   | _, .incDec inc => s.setCur (adjDecimals c.v inc)
   | _, .quit => quitOrPop s
-  | _, .clearSel => clearSel c.v |>.map s.setCur |>.getD s
+  | _, .esc => clearSel c.v |>.map s.setCur |>.getD s
   -- push views (freq: add curCol only if not already in keyCols)
   | _, .freq => let cur := curColName c
                 let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
@@ -258,7 +258,7 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
-  | _, .inputCmd => { s with inputMode := .command, inputBuf := "" }
+  | _, .colon => { s with inputMode := .command, inputBuf := "" }
   | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
   -- ret: pure cases (colMeta -> pop to parent, others -> no-op for pure, IO handled separately)
   | .colMeta, .ret => if c.v.selRows.isEmpty then s

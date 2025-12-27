@@ -90,13 +90,13 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   else if ev.ch == chBackslash then Key.backslash c s
   else if ev.ch == chS then Key.sel c s
   else if ev.ch == chM then Key.M c s
-  else if ev.ch == chI then pure (runKey c .toggleInfo s)
+  else if ev.ch == chI then pure (runKey c .I s)
   else if ev.ch == chF then pure (runKey c .freq s)
   else if ev.key == Term.keyEnter || ev.ch == 13 then Key.ret c s
   else if ev.ch == chT then pure (runKey c .dup s)
   else if ev.ch == chSS then pure (runKey c .swap s)
-  else if ev.ch == chExcl then pure (runKey c .toggleKey s)
-  else if ev.ch == chSpace then pure (runKey c .toggleSel s)
+  else if ev.ch == chExcl then pure (runKey c .bang s)
+  else if ev.ch == chSpace then pure (runKey c .spc s)
   else if ev.ch == chB then Key.b c s
   else if ev.ch == chColon then Key.colon c s
   else if ev.ch == chCaret then Key.caret c s
@@ -105,7 +105,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   else if ev.ch == chLL then Key.L c s
   else if ev.ch == chR then pure (runKey c .lr s)
   else if ev.ch == chQ then pure (runKey c .quit s)
-  else if ev.key == Term.keyEsc then pure (runKey c .clearSel s)
+  else if ev.key == Term.keyEsc then pure (runKey c .esc s)
   else if ev.ch == chCtrlC then pure { s with quit := true }
   else pure s
 
