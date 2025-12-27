@@ -5,10 +5,6 @@ import Tv.Types
 
 namespace Prql
 
--- | Sort direction
-inductive Dir where | asc | desc
-  deriving Inhabited, BEq
-
 -- | Aggregate function
 inductive Agg where
   | count | sum | avg | min | max | stddev
@@ -17,7 +13,7 @@ inductive Agg where
 -- | PRQL operation (single pipe stage)
 inductive Op where
   | filter (expr : String)                          -- filter <expr>
-  | sort (cols : Array (String × Dir))              -- sort {col, -col2}
+  | sort (cols : Array (String × Bool))             -- sort {col, -col2}; Bool = asc
   | sel (cols : Array String)                       -- select {a, b, c}
   | derive (bindings : Array (String × String))     -- derive {x = expr}
   | group (keys : Array String) (aggs : Array (Agg × String × String))  -- group {k} (agg {name = fn col})
@@ -43,10 +39,10 @@ def quote (s : String) : String :=
   else if reserved.contains s then s!"this.{s}"
   else s
 
--- | Render sort direction (quotes col if needed)
-def Dir.render (d : Dir) (col : String) : String :=
+-- | Render sort column (asc = col, desc = -col)
+def renderSort (col : String) (asc : Bool) : String :=
   let qc := quote col
-  match d with | .asc => qc | .desc => s!"-{qc}"
+  if asc then qc else s!"-{qc}"
 
 -- | Render aggregate function name (std. prefix to avoid column name conflicts)
 def Agg.name : Agg → String
@@ -61,7 +57,7 @@ def Agg.short : Agg → String
 -- | Render single operation to PRQL string
 def Op.render : Op → String
   | .filter e => s!"filter {e}"
-  | .sort cols => s!"sort \{{(cols.map fun (c, d) => d.render c).join ", "}}"
+  | .sort cols => s!"sort \{{(cols.map fun (c, asc) => renderSort c asc).join ", "}}"
   | .sel cols => s!"select \{{(cols.map quote).join ", "}}"
   | .derive bs => s!"derive \{{(bs.map fun (n, e) => s!"{quote n} = {e}").join ", "}}"
   | .group keys aggs =>
@@ -89,8 +85,8 @@ infixl:65 " |> " => Query.pipe  -- q |> .filter "x > 5"
 def Query.new (tbl : String := "df") : Query := ⟨s!"from {tbl}", #[]⟩
 
 def Query.filter (q : Query) (expr : String) : Query := q.pipe (.filter expr)
-def Query.sortAsc (q : Query) (col : String) : Query := q.pipe (.sort #[(col, .asc)])
-def Query.sortDesc (q : Query) (col : String) : Query := q.pipe (.sort #[(col, .desc)])
+def Query.sortAsc (q : Query) (col : String) : Query := q.pipe (.sort #[(col, true)])
+def Query.sortDesc (q : Query) (col : String) : Query := q.pipe (.sort #[(col, false)])
 def Query.select (q : Query) (cols : Array String) : Query := q.pipe (.sel cols)
 def Query.derive1 (q : Query) (name expr : String) : Query := q.pipe (.derive #[(name, expr)])
 
@@ -99,7 +95,7 @@ def Query.freq (q : Query) (cols : Array String) : Query :=
   let grp : Op := .group cols #[(.count, "Cnt", "this")]
   let pct : Op := .derive #[("Pct", "Cnt * 100 / std.sum Cnt"),
                             ("Bar", "s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"")]
-  let srt : Op := .sort #[("Cnt", .desc)]
+  let srt : Op := .sort #[("Cnt", false)]  -- desc
   { q with ops := q.ops ++ #[grp, pct, srt] }
 
 -- | Aggregate query (group by keys, apply funcs to cols)

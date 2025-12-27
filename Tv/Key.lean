@@ -106,9 +106,10 @@ def curColName (c : KeyCtx) : String :=
 
 /-! ## Pure view/state transformations -/
 
--- | Sort view by column
+-- | Sort view by key columns + current column (all same direction)
 def sortBy (v : View) (col : String) (asc : Bool) : View :=
-  v.copy (query := if asc then v.query.sortAsc col else v.query.sortDesc col)
+  let cols := if v.nav.keyCols.contains col then v.nav.keyCols else v.nav.keyCols.push col
+  v.copy (query := v.query.pipe (.sort (cols.map (·, asc))))
 
 -- | Delete columns from view (returns none if no cols left)
 def delCols (v : View) (di : DisplayInfo) : Option View :=
