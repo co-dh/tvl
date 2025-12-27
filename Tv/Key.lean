@@ -7,6 +7,7 @@ import Tv.Backend
 import Tv.State
 import Tv.Fzf
 import Tv.Prql
+import Tv.Meta
 
 namespace App
 
@@ -166,21 +167,6 @@ def adjDecimals (v : View) (inc : Bool) : View :=
 def quitOrPop (s : State) : State :=
   if s.views.size > 1 then s.pop else { s with quit := true }
 
--- | Meta view column indices (from Backend.queryMeta schema)
-def metaColDist' : Nat := 3   -- distinct count column
-def metaColNull' : Nat := 4   -- null% column
-
--- | Select rows where cell at column satisfies predicate
-def selectRows (st : SomeTable) (col : Nat) (pred : Cell → Bool) : Array Nat :=
-  (Array.range st.nRows).filter fun r => pred (st.table.getIdx r col)
-
--- | Select 100% null columns
-def selectFullNull (st : SomeTable) : Array Nat :=
-  selectRows st metaColNull' (·.str?.any (· == "100%"))
-
--- | Select single-value columns (distinct == 1)
-def selectSingleVal (st : SomeTable) : Array Nat :=
-  selectRows st metaColDist' (·.int?.any (· == 1))
 
 -- | Adjust column offset to keep cursor visible
 def adjOff (c : KeyCtx) (nav : PureState) : PureState :=
@@ -193,22 +179,6 @@ def adjOff (c : KeyCtx) (nav : PureState) : PureState :=
 @[simp] theorem adjOff_colCur (c : KeyCtx) (nav : PureState) : (adjOff c nav).colCur = nav.colCur := rfl
 @[simp] theorem adjOff_keyCols (c : KeyCtx) (nav : PureState) : (adjOff c nav).keyCols = nav.keyCols := rfl
 
--- | Pure: pop meta view and set parent's keyCols + selCols
-def popMetaState (s : State) (selColNames : Array String) : State :=
-  if h : s.parents.size > 0 then
-    let parent := s.parents[0]
-    let rest := s.parents.extract 1 s.parents.size
-    let nav' := { parent.nav with keyCols := selColNames, colCur := ⟨0⟩, colOff := ⟨0⟩ }
-    let parent' := { parent with nav := nav', selCols := selColNames }
-    { s with curView := parent', parents := rest }
-  else s
-
--- | Get column names from selected rows in meta table (col 0 is "name")
-def metaSelNames (st : SomeTable) (selRows : Array Nat) : Array String :=
-  selRows.filterMap fun r =>
-    match st.table.getIdx r 0 with
-    | .str s => some s
-    | _ => none
 
 -- | Build PRQL filter from column names and cell values
 -- Purpose: When Enter on freq row, filter parent to matching rows
@@ -226,8 +196,8 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   let n := c.v.nav
   match c.v.vkind, key with
   -- colMeta special: 0 selects 100% null, 1 selects single-value
-  | .colMeta, ._0 => c.v.cache.map (fun st => s.setCur { c.v with selRows := selectFullNull st }) |>.getD s
-  | .colMeta, ._1 => c.v.cache.map (fun st => s.setCur { c.v with selRows := selectSingleVal st }) |>.getD s
+  | .colMeta, ._0 => c.v.cache.map (fun st => s.setCur { c.v with selRows := Meta.selNull st }) |>.getD s
+  | .colMeta, ._1 => c.v.cache.map (fun st => s.setCur { c.v with selRows := Meta.selSingle st }) |>.getD s
   -- navigation: j/k/l/h/g/G/0/$/ctrlD/ctrlU/retMeta/colJump
   | _, .j => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + 1) lastRow } }
   | _, .k => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - 1 } }
@@ -269,7 +239,7 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
   -- ret: view-specific behavior
   | .colMeta, .ret => if c.v.selRows.isEmpty then s
-                      else c.v.cache.map (fun st => popMetaState s (metaSelNames st c.v.selRows)) |>.getD s
+                      else c.v.cache.map (fun st => Meta.popState s (Meta.selNames st c.v.selRows)) |>.getD s
   | .tbl, .ret => s  -- plain table: no-op
   | .fld, .ret =>
     -- folder view: push subfolder if c.row set by IO
@@ -365,13 +335,6 @@ theorem runKey_l_colCur (c : KeyCtx) (s : State) :
     let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
     (runKey c .l s).curView.nav.colCur.val = min (c.v.nav.colCur.val + 1) lastCol := by
   simp [runKey, State.setCur]
-
--- | Theorem: popMetaState sets cursor = 0 and keyCols = sel
-theorem popMetaState_cursor (s : State) (sel : Array String) (h : s.parents.size > 0) :
-    (popMetaState s sel).curView.nav.colCur.val = 0 ∧
-    (popMetaState s sel).curView.nav.keyCols = sel := by
-  simp [popMetaState, h]
-
 
 -- | ret - enter key (dispatch by ViewKind, IO cases)
 def ret (c : KeyCtx) (s : State) : KeyResult :=
