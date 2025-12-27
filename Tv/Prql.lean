@@ -21,7 +21,6 @@ inductive Op where
   | excl (cols : List String)                      -- select * exclude (a, b) via DuckDB
   | derive (bindings : List (String × String))     -- derive {x = expr}
   | group (keys : List String) (aggs : List (Agg × String × String))  -- group {k} (agg {name = fn col})
-  | freq (col : String)                            -- freq col (builtin)
   | take (n : Nat)                                 -- take n
   | colMeta (col : String)                         -- aggregate {cnt, dist, total, min, max}
   deriving Inhabited
@@ -79,7 +78,6 @@ def Op.render : Op → String
     let ks := String.intercalate ", " (keys.map quote)
     let as := aggs.map fun (fn, name, col) => s!"{name} = {fn.name} {quote col}"
     s!"group \{{ks}} (aggregate \{{String.intercalate ", " as}})"
-  | .freq col => s!"freq {quote col}"
   | .take n => s!"take {n}"
   | .colMeta col => s!"meta {quote col}"  -- uses meta function from prqlFuncs
 
@@ -110,10 +108,9 @@ def Query.sortDesc (q : Query) (col : String) : Query := q.pipe (.sort [(col, .d
 def Query.select (q : Query) (cols : List String) : Query := q.pipe (.sel cols)
 def Query.exclude (q : Query) (cols : List String) : Query := q.pipe (.excl cols)
 def Query.derive1 (q : Query) (name expr : String) : Query := q.pipe (.derive [(name, expr)])
-def Query.freq (q : Query) (col : String) : Query := q.pipe (.freq col)
 
--- | Frequency query with percentage bar (common pattern)
-def Query.freqFull (q : Query) (cols : List String) : Query :=
+-- | Frequency query with percentage bar
+def Query.freq (q : Query) (cols : List String) : Query :=
   let grp : Op := .group cols [(.count, "Cnt", "this")]
   let pct : Op := .derive [("Pct", "Cnt * 100 / std.sum Cnt"),
                            ("Bar", "s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"")]

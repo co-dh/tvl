@@ -256,7 +256,7 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   -- push views
   | _, .freq => let cols := n.keyCols ++ [curColName c]
                 let colStr := String.intercalate "," cols
-                s.push ⟨c.v.path, c.v.query.freqFull cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, [], [], none, 3⟩
+                s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, [], [], none, 3⟩
   | _, .lr => s.push ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, [], [], none, 3⟩
   | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
   | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
