@@ -152,10 +152,6 @@ def colNames (t : Table n) : Array String := t.cols.map (·.1)
 def findCol (t : Table n) (name : String) : Option (ColData n) :=
   t.cols.find? (·.1 == name) |>.map (·.2)
 
--- | Get column width by name
-def colWidth (t : Table n) (name : String) : Nat :=
-  t.findCol name |>.map (·.width) |>.getD 10
-
 -- | Get cell at (row, colName)
 def get (t : Table n) (row : Nat) (name : String) : Cell :=
   t.findCol name |>.map (·.cells.val.getD row .null) |>.getD .null
