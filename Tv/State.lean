@@ -1,25 +1,22 @@
 /-
-  State types: NavState, View, ViewKind, InputMode, State
+  State types: PureState, View, ViewKind, InputMode, State
+  All navigation through PureState with DispIdx for column cursors
 -/
 import Tv.Types
 import Tv.Backend
 
 namespace App
 
--- | Core navigation state (cursor + offset for row/col, key columns)
-structure NavState where
-  rowCur  : Nat := 0          -- row cursor
-  rowOff  : Nat := 0          -- row offset (first visible)
-  colCur  : Nat := 0          -- column cursor
-  colOff  : Nat := 0          -- column offset (first visible in display order)
-  keyCols : List String := [] -- key column names (stable across delete)
-  delCols : List String := [] -- deleted column names (for EXCLUDE)
+-- | Pure navigation state (all handlers work on this)
+-- colCur/colOff are DispIdx to enforce display order indexing
+structure PureState where
+  rowCur  : Nat := 0              -- row cursor
+  rowOff  : Nat := 0              -- row offset (first visible)
+  colCur  : DispIdx := ⟨0⟩        -- column cursor in DISPLAY order
+  colOff  : DispIdx := ⟨0⟩        -- column offset in DISPLAY order
+  keyCols : List String := []     -- key column names (stable across delete)
+  delCols : List String := []     -- deleted column names (for EXCLUDE)
   deriving Repr
-
-namespace NavState
-def create : NavState := ⟨0, 0, 0, 0, [], []⟩
-def goto (col nCols : Nat) : NavState := ⟨0, 0, min col (nCols - 1), 0, [], []⟩
-end NavState
 
 -- | View kind: how to render/interact
 inductive ViewKind where
@@ -31,15 +28,15 @@ inductive ViewKind where
 
 -- | Single view with PRQL query
 structure View where
-  path    : String         -- file path
-  prql    : String         -- PRQL query (from df | ...)
-  disp    : String := ""   -- display name for tab
-  nav     : NavState := NavState.create
-  vkind   : ViewKind := .tbl
-  cache   : Option Table := none
-  selCols : List Nat := []
-  selRows : List Nat := []
-  total   : Option Nat := none
+  path     : String              -- file path
+  prql     : String              -- PRQL query (from df | ...)
+  disp     : String := ""        -- display name for tab
+  nav      : PureState := {}     -- navigation state
+  vkind    : ViewKind := .tbl
+  cache    : Option SomeTable := none
+  selCols  : List DispIdx := []  -- selected columns (display order)
+  selRows  : List Nat := []
+  total    : Option Nat := none
   decimals : Nat := 3
 
 -- | Pending input for interactive commands
@@ -53,15 +50,15 @@ inductive InputMode where
 
 -- | App state with non-empty view stack (curView always exists)
 structure State where
-  curView  : View            -- current view (always exists)
-  parents  : List View := [] -- parent views (can be empty)
-  keys     : List Char := [] -- pending keys to replay
-  msg      : String := ""    -- status message
-  quit     : Bool := false
-  testMode : Bool := false   -- exit after keys consumed
+  curView   : View            -- current view (always exists)
+  parents   : List View := [] -- parent views (can be empty)
+  keys      : List Char := [] -- pending keys to replay
+  msg       : String := ""    -- status message
+  quit      : Bool := false
+  testMode  : Bool := false   -- exit after keys consumed
   inputMode : InputMode := .none  -- current input mode
   inputBuf  : String := ""        -- input buffer for interactive commands
-  showInfo : Bool := false        -- show info overlay (toggle with I)
+  showInfo  : Bool := false       -- show info overlay (toggle with I)
 
 -- | Current view (just curView, no headD needed)
 def State.cur (s : State) : View := s.curView
@@ -70,8 +67,7 @@ def State.cur (s : State) : View := s.curView
 def State.views (s : State) : List View := s.curView :: s.parents
 
 -- | Update current view
-def State.setCur (s : State) (v : View) : State :=
-  { s with curView := v }
+def State.setCur (s : State) (v : View) : State := { s with curView := v }
 
 -- | Push new view (current becomes parent)
 def State.push (s : State) (v : View) : State :=
@@ -100,29 +96,28 @@ def State.setMsg (s : State) (m : String) : State := { s with msg := m }
 def maxRows : Nat := 1000
 
 -- | Fetch table for view (uses cache or queries backend)
-def View.fetch (v : View) : IO (View × Table) := do
+def View.fetch (v : View) : IO (View × SomeTable) := do
   match v.cache with
-  | some t => return (v, t)
+  | some st => return (v, st)
   | none =>
     match ← Backend.query (Backend.mkLimited v.prql maxRows) v.path with
-    | .ok t =>
+    | .ok st =>
       let total ← match v.total with
         | some n => pure n
-        | none => do
-          match ← Backend.queryCount v.prql v.path with
+        | none => match ← Backend.queryCount v.prql v.path with
           | .ok n => pure n
-          | .error _ => pure t.nRows
-      return ({ v with cache := some t, total := some total }, t)
+          | .error _ => pure st.nRows
+      return ({ v with cache := some st, total := some total }, st)
     | .error e =>
       Backend.logError s!"Query error: {e}"
-      return (v, Table.empty)
+      return (v, ⟨0, Table.empty⟩)
 
 -- | Invalidate cache (after PRQL change)
 def View.invalidate (v : View) : View := { v with cache := none }
 
 -- | View.copy helper for updating PRQL and resetting cache/total
-def View.copy (v : View) (prql : String := v.prql) (nav : NavState := v.nav) : View :=
-  { v with prql := prql, nav := nav, cache := none, total := none }
+def View.copy (v : View) (prql : String := v.prql) : View :=
+  { v with prql := prql, cache := none, total := none }
 
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String

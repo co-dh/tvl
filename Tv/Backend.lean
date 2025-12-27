@@ -28,16 +28,17 @@ def parseCell (s : String) : Cell :=
   else .null
 
 -- | Save meta table to cache file
-def saveMetaCache (path : String) (tbl : Table) : IO Unit := do
+def saveMetaCache (path : String) (st : SomeTable) : IO Unit := do
   let cachePath := metaCachePath path
-  let colNames := tbl.cols.toList.map (·.name) |> String.intercalate "\t"
-  let rows := tbl.rows.toList.map fun row =>
-    row.toList.map serializeCell |> String.intercalate "\t"
+  let tbl := st.table
+  let colNames := tbl.colNames.toList |> String.intercalate "\t"
+  let rows := (List.range st.nRows).map fun r =>
+    tbl.colNames.toList.map (fun c => serializeCell (tbl.get r c)) |> String.intercalate "\t"
   let content := colNames :: rows |> String.intercalate "\n"
   IO.FS.writeFile cachePath content
 
 -- | Load meta table from cache file (returns none if missing/invalid)
-def loadMetaCache (path : String) : IO (Option Table) := do
+def loadMetaCache (path : String) : IO (Option SomeTable) := do
   let cachePath := metaCachePath path
   try
     -- Check if cache is newer than source
@@ -49,11 +50,10 @@ def loadMetaCache (path : String) : IO (Option Table) := do
     match lines with
     | [] => return none
     | hdr :: dataLines =>
-      let colNames := hdr.splitOn "\t"
-      let cols := colNames.map (⟨·⟩) |>.toArray
-      let rows := dataLines.map fun line =>
-        line.splitOn "\t" |>.map parseCell |>.toArray
-      return some (Table.create cols rows.toArray)
+      let colNames := hdr.splitOn "\t" |>.toArray
+      let rows := dataLines.map (fun line =>
+        line.splitOn "\t" |>.map parseCell |>.toArray) |>.toArray
+      return some (Table.create colNames rows)
   catch _ => return none
 
 -- | PRQL function definitions (prepended to all queries)
@@ -144,17 +144,17 @@ def replaceDf (sql : String) (tableExpr : String) : String :=
 def fmtChar (fmt : String) : Char :=
   if h : fmt.length > 0 then fmt.toList[0] else '?'
 
--- | Convert QueryResult to Table
-def qrToTable (qr : Adbc.QueryResult) : IO Table := do
+-- | Convert QueryResult to SomeTable
+def qrToTable (qr : Adbc.QueryResult) : IO SomeTable := do
   let nc ← Adbc.ncols qr
   let nr ← Adbc.nrows qr
-  let mut cols := #[]
+  let mut cols : Array String := #[]
   for i in [:nc.toNat] do
     let name ← Adbc.colName qr i.toUInt64
-    cols := cols.push ⟨name⟩
-  let mut rows := #[]
+    cols := cols.push name
+  let mut rows : Array (Array Cell) := #[]
   for r in [:nr.toNat] do
-    let mut row := #[]
+    let mut row : Array Cell := #[]
     for c in [:nc.toNat] do
       let isNull ← Adbc.cellIsNull qr r.toUInt64 c.toUInt64
       if isNull then
@@ -185,7 +185,7 @@ def init : IO Bool := Adbc.init
 def shutdown : IO Unit := Adbc.shutdown
 
 -- | Execute raw SQL
-def execSql (sql : String) : IO Table := do
+def execSql (sql : String) : IO SomeTable := do
   let qr ← Adbc.query sql
   qrToTable qr
 
@@ -221,7 +221,7 @@ structure LimitedQuery where
   proof : hasLimit prql = true
 
 -- | Execute PRQL query on path (requires proof of limit)
-def query (q : LimitedQuery) (path : String) : IO (Except String Table) := do
+def query (q : LimitedQuery) (path : String) : IO (Except String SomeTable) := do
   logPrql q.prql
   -- Create source table if needed
   if isSource path then createSource path
@@ -231,8 +231,8 @@ def query (q : LimitedQuery) (path : String) : IO (Except String Table) := do
     let tableExpr := fileExpr path
     let sql := replaceDf sql tableExpr
     try
-      let tbl ← execSql sql
-      return .ok tbl
+      let st ← execSql sql
+      return .ok st
     catch e =>
       return .error s!"SQL error: {e}"
 
@@ -250,9 +250,9 @@ def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
   let countPrql := prql ++ " | aggregate {n = count this}"
   match ← query (mkLimited countPrql 1) path with
   | .error e => return .error e
-  | .ok tbl =>
-    if tbl.nRows > 0 then
-      match tbl.get 0 0 with
+  | .ok st =>
+    if st.nRows > 0 then
+      match st.table.getIdx 0 0 with
       | .int cnt => return .ok cnt.toNat
       | _ => return .ok 0
     else
@@ -264,9 +264,9 @@ def queryRow (prql : String) (path : String) (row : Nat) (ncols : Nat) : IO (Exc
   let rowPrql := prql ++ s!" | take {row + 1}"
   match ← query (mkLimited rowPrql (row + 1)) path with
   | .error e => return .error e
-  | .ok tbl =>
-    if tbl.nRows > row then
-      return .ok ((List.range ncols).map fun c => tbl.get row c)
+  | .ok st =>
+    if st.nRows > row then
+      return .ok ((List.range ncols).map fun c => st.table.getIdx row c)
     else
       return .ok []
 
@@ -281,8 +281,8 @@ def queryDistinct (prql : String) (path : String) (col : String) : IO (Except St
   | .ok sql =>
     let sql := replaceDf sql (fileExpr path)
     try
-      let tbl ← execSql sql
-      return .ok ((List.range tbl.nRows).map fun r => toString (tbl.get r 0))
+      let st ← execSql sql
+      return .ok ((List.range st.nRows).map fun r => toString (st.table.getIdx r 0))
     catch e =>
       return .error s!"SQL error: {e}"
 
@@ -296,7 +296,7 @@ def fmtToType : Char → String
   | _ => "?"
 
 -- | Query column metadata (stats for all columns), with cache
-def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
+def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := do
   -- Check cache first (only for base prql "from df")
   let isBasePrql := prql == "from df"
   if isBasePrql then
@@ -307,8 +307,8 @@ def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
   match ← query (mkLimited schemaPrql 1) path with
   | .error e => return .error e
   | .ok schema =>
-    let colNames := schema.cols.map (·.name)
-    if colNames.isEmpty then return .ok Table.empty
+    let colNames := schema.table.colNames
+    if colNames.isEmpty then return .ok ⟨0, Table.empty⟩
     -- Get types from schema query result
     let typesPrql := prql ++ " | take 0"  -- just schema
     if isSource path then createSource path
@@ -339,20 +339,20 @@ def queryMeta (prql : String) (path : String) : IO (Except String Table) := do
       let metaPrql := (Prql.Query.parse prql).colMeta colName |>.render
       match ← query (mkLimited metaPrql 1) path with
       | .error _ => rows := rows.push #[.str colName, .str colType, .null, .null, .str "?", .null, .null]
-      | .ok tbl =>
-        if tbl.nRows > 0 then
-          let cnt := tbl.get 0 0
-          let dist := tbl.get 0 1
-          let total := tbl.get 0 2
-          let minV := tbl.get 0 3
-          let maxV := tbl.get 0 4
+      | .ok st =>
+        if st.nRows > 0 then
+          let cnt := st.table.getIdx 0 0
+          let dist := st.table.getIdx 0 1
+          let total := st.table.getIdx 0 2
+          let minV := st.table.getIdx 0 3
+          let maxV := st.table.getIdx 0 4
           let nullPct := match cnt, total with
             | .int c, .int t => if t > 0 then s!"{(t - c) * 100 / t}%" else "0%"
             | _, _ => "?"
           rows := rows.push #[.str colName, .str colType, cnt, dist, .str nullPct, minV, maxV]
         else
           rows := rows.push #[.str colName, .str colType, .null, .null, .str "?", .null, .null]
-    let metaCols := #[⟨"column"⟩, ⟨"type"⟩, ⟨"cnt"⟩, ⟨"dist"⟩, ⟨"null%"⟩, ⟨"min"⟩, ⟨"max"⟩]
+    let metaCols := #["column", "type", "cnt", "dist", "null%", "min", "max"]
     let result := Table.create metaCols rows
     -- Save to cache for base prql
     if isBasePrql then

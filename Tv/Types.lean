@@ -1,6 +1,19 @@
 /-
   Core types: Cell, Column, Table
+  Table stores columns by name (HashMap) for direct name-based access
 -/
+import Std.Data.HashMap
+
+-- | Index into display order (keyCols first, then rest)
+structure DispIdx where val : Nat deriving Repr, Inhabited, BEq
+
+-- | Access array by DispIdx
+def Array.getDisp (arr : Array α) (idx : DispIdx) (default : α) : α :=
+  arr.getD idx.val default
+
+-- | Find index in array, returns DispIdx
+def Array.findDispIdx? (arr : Array α) (p : α → Bool) : Option DispIdx :=
+  arr.findIdx? p |>.map (⟨·⟩)
 
 -- | Cell value (sum type)
 inductive Cell where
@@ -13,17 +26,17 @@ inductive Cell where
 
 namespace Cell
 
--- | Format integer with comma separators (iterate right-to-left)
+-- | Format integer with comma separators
 def fmtInt (n : Int) : String :=
   let s := s!"{n.natAbs}"
-  let chars := s.toList.reverse  -- start from least significant
+  let chars := s.toList.reverse
   let rec go (cs : List Char) (acc : List Char) (cnt : Nat) : List Char :=
     match cs with
     | [] => acc
     | c :: rest =>
       let acc' := if cnt > 0 && cnt % 3 = 0 then c :: ',' :: acc else c :: acc
       go rest acc' (cnt + 1)
-  let digits := go chars []  0
+  let digits := go chars [] 0
   if n < 0 then "-" ++ String.ofList digits else String.ofList digits
 
 -- | Theorem: fmtInt preserves digit order (no reversal)
@@ -106,117 +119,76 @@ instance : Ord Cell where compare := compare
 
 end Cell
 
--- | Column metadata
-structure Column where
-  name : String
-  deriving Repr, Inhabited
+-- | Sized array (array with type-level length proof)
+abbrev SizedArray (α : Type) (n : Nat) := { arr : Array α // arr.size = n }
 
--- | Table with sized dimensions and cached widths
-structure Table where
-  cols : Array Column
-  rows : Array (Array Cell)
-  widths : Array Nat  -- cached column widths (size = cols.size)
+-- | Column data with typed row count
+structure ColData (nRows : Nat) where
+  cells : SizedArray Cell nRows
+  width : Nat
   deriving Repr
 
+-- | Table with typed row count, columns in insertion order
+structure Table (nRows : Nat) where
+  cols : Array (String × ColData nRows)
+  deriving Repr
+
+-- | Existential wrapper for tables with unknown row count
+structure SomeTable where
+  nRows : Nat
+  table : Table nRows
+
 namespace Table
+-- | INVARIANT: Table is READ-ONLY for display. No client-side sorting, filtering,
+-- | or aggregation (freq). All data transformations go through PRQL/Backend.
+-- | Table only provides: cell access for rendering, column metadata for navigation.
 
-def nCols (t : Table) : Nat := t.cols.size
-def nRows (t : Table) : Nat := t.rows.size
+def nCols (t : Table n) : Nat := t.cols.size
 
--- | Compute column widths (max of header and data, capped at 50)
--- Size-preserving: result.size = cols.size
-def calcWidths (cols : Array Column) (rows : Array (Array Cell)) : Array Nat :=
-  let n := cols.size
-  let hdrW := cols.map (·.name.length)  -- size = n
-  let dataW := rows.foldl (init := hdrW) fun acc row =>
-    -- pad row to n columns with 0-length cells, then zipWith preserves size
-    let rowW := (Array.range n).map fun i =>
-      (row.getD i .null |> Cell.toString).length
-    Array.zipWith (fun a b => max a b) acc rowW
-  dataW.map (fun w => min 50 w)
+-- | Get column names in order
+def colNames (t : Table n) : Array String := t.cols.map (·.1)
 
+-- | Find column by name (linear scan, OK for <100 cols)
+def findCol (t : Table n) (name : String) : Option (ColData n) :=
+  t.cols.find? (·.1 == name) |>.map (·.2)
 
--- | Create table with cached widths
-def create (cols : Array Column) (rows : Array (Array Cell)) : Table :=
-  ⟨cols, rows, calcWidths cols rows⟩
+-- | Get column width by name
+def colWidth (t : Table n) (name : String) : Nat :=
+  t.findCol name |>.map (·.width) |>.getD 10
 
--- | Theorem: widths cover header names (width >= min 50 name.length)
-def widthsValid (cols : Array Column) (widths : Array Nat) : Bool :=
-  cols.size == widths.size &&
-  (Array.range cols.size).all fun i =>
-    widths.getD i 0 >= min 50 (cols.getD i default).name.length
+-- | Get cell at (row, colName)
+def get (t : Table n) (row : Nat) (name : String) : Cell :=
+  t.findCol name |>.map (·.cells.val.getD row .null) |>.getD .null
 
--- | Concrete test: calcWidths produces valid widths
-theorem calcWidths_valid_ex1 :
-    let cols := #[⟨"Name"⟩, ⟨"LongerColumnName"⟩, ⟨"X"⟩]
-    let rows := #[#[Cell.str "A", Cell.str "B", Cell.str "C"]]
-    widthsValid cols (calcWidths cols rows) = true := by native_decide
+-- | Get cell at (row, colIdx) - for backwards compat
+def getIdx (t : Table n) (row col : Nat) : Cell :=
+  t.cols[col]? |>.map (·.2.cells.val.getD row .null) |>.getD .null
 
-def empty : Table := ⟨#[], #[], #[]⟩
+-- | Compute width for column (max of name and data, capped at 50)
+def calcWidth (name : String) (cells : Array Cell) : Nat :=
+  let hdrW := name.length
+  let dataW := cells.foldl (init := hdrW) fun acc c =>
+    max acc c.toString.length
+  min 50 dataW
 
--- | Get cell at (row, col), returns Option
-def get? (t : Table) (r c : Nat) : Option Cell :=
-  if hr : r < t.rows.size then
-    let row := t.rows[r]
-    if hc : c < row.size then some row[c] else none
-  else none
+-- | Create table from column names and row data (returns existential)
+def create (colNames : Array String) (rows : Array (Array Cell)) : SomeTable :=
+  let nRows := rows.size
+  -- transpose row-major to column-major
+  let cols := colNames.mapIdx fun i name =>
+    let cells := rows.map fun row => row.getD i .null
+    let width := calcWidth name cells
+    -- proof that cells.size = nRows
+    have h : cells.size = nRows := Array.size_map ..
+    (name, ColData.mk ⟨cells, h⟩ width)
+  ⟨nRows, ⟨cols⟩⟩
 
--- | Get cell at (row, col), default to null
-def get (t : Table) (r c : Nat) : Cell :=
-  t.get? r c |>.getD .null
+-- | Empty table
+def empty : Table 0 := ⟨#[]⟩
 
--- | Delete column at index
-def delCol (t : Table) (idx : Nat) : Table :=
-  if idx ≥ t.nCols then t
-  else
-    let newCols := t.cols.eraseIdx! idx
-    let newRows := t.rows.map (·.eraseIdx! idx)
-    ⟨newCols, newRows, t.widths.eraseIdx! idx⟩
-
--- | Access cached widths
-def colWidths (t : Table) : Array Nat := t.widths
-
--- | Filter rows where column c equals value v
-def filter (t : Table) (c : Nat) (v : Cell) : Table :=
-  let newRows := t.rows.filter fun row => row.getD c .null == v
-  create t.cols newRows
-
--- | Sort table by column index (asc = true for ascending)
-def sortBy (t : Table) (col : Nat) (asc : Bool) : Table :=
-  let cmp := fun r1 r2 : Array Cell =>
-    let c1 := r1.getD col .null
-    let c2 := r2.getD col .null
-    if asc then Cell.compare c1 c2 else Cell.compare c2 c1
-  let sorted := t.rows.toList.mergeSort (fun a b => cmp a b == .lt) |>.toArray
-  { t with rows := sorted }
-
--- | Build bar string with # chars
-def mkBar (pct : Nat) (maxW : Nat := 20) : String :=
-  let n := min maxW (pct * maxW / 100)
-  String.ofList (List.replicate n '#')
-
--- | Frequency table for column c: (value, count, pct, bar) sorted by count desc
-def freq (t : Table) (c : Nat) : Table :=
-  let colName := t.cols.getD c ⟨"?"⟩ |>.name
-  let total := t.nRows
-  -- count occurrences using fold
-  let counts := t.rows.foldl (init := #[]) fun acc row =>
-    let v := row.getD c .null
-    match acc.findIdx? (·.1 == v) with
-    | some i =>
-      if hi : i < acc.size then
-        let (_, cnt) := acc[i]'hi
-        acc.set i (v, cnt + 1) hi
-      else acc
-    | none => acc.push (v, 1)
-  -- sort by count descending
-  let sorted := counts.qsort (fun a b => a.2 > b.2)
-  -- build result table with pct and bar
-  let cols := #[⟨colName⟩, ⟨"Cnt"⟩, ⟨"Pct"⟩, ⟨"Bar"⟩]
-  let rows := sorted.map fun (v, n) =>
-    let pct := if total > 0 then n * 100 / total else 0
-    #[v, .int n, .str s!"{pct}%", .str (mkBar pct)]
-  create cols rows
+-- | Get all column widths in order
+def colWidths (t : Table n) : Array Nat :=
+  t.cols.map (·.2.width)
 
 end Table
 
@@ -229,8 +201,8 @@ structure DisplayInfo where
   nCols     : Nat
 
 -- | Extract display info from table (only way to get metadata)
-def Table.info (t : Table) : DisplayInfo :=
-  ⟨t.cols.map (·.name), t.colWidths, t.nRows, t.nCols⟩
+def Table.info (t : Table n) : DisplayInfo :=
+  ⟨t.colNames, t.colWidths, n, t.nCols⟩
 
 -- | INVARIANT: handleKey receives DisplayInfo, not Table.
 -- | This makes it impossible to access cell data outside rendering.

@@ -199,6 +199,16 @@ def test_toggle_key_selected_cols : IO Unit := do
   let (_, status) := footer output
   assert (contains status "keys=2") s!"! on selected should set 2 keys: {status}"
 
+-- | Cursor should track column name when key is toggled
+-- Navigate to col 1 (b), set as key, cursor should stay on b (now at pos 0), l moves to a
+def test_key_cursor_tracks_column : IO Unit := do
+  let output ← runKeys "l!l" "tests/data/basic.csv"  -- go to b, key it, go right
+  let hdr := header output
+  let (_, status) := footer output
+  -- After l!l: b is key at pos 0, cursor moved right to a (pos 1)
+  assert (contains hdr "b|") s!"b should be key col: {hdr}"
+  assert (contains status "c1+") s!"cursor should be at col 1 after l: {status}"
+
 def test_freq_after_meta : IO Unit := do
   let output ← runKeys "MqF" "tests/data/basic.csv"
   let (tab, _) := footer output
@@ -384,6 +394,7 @@ def main : IO Unit := do
   test_rename_column
   test_duplicate_view
   test_toggle_key_selected_cols
+  test_key_cursor_tracks_column
   test_freq_after_meta
   test_freq_by_key_columns
   test_freq_multi_key_columns

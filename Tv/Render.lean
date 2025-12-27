@@ -40,24 +40,24 @@ theorem rowVisibleP_always (cursor visRows : Nat) (h : visRows > 0) :
 
 
 -- | Render header row with underline attribute (highlights selected columns)
-def header (t : Table) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
+def header (st : SomeTable) (cols : Array ColPos) (selCol : Nat) (y : UInt32)
            (selCols : List Nat := []) : IO Unit := do
+  let colNames := st.table.colNames
   for (i, x, w) in cols do
-    let col := t.cols.getD i default
+    let name := colNames.getD i ""
     let isSel := selCols.contains i
     let (fg, bg) := if i == selCol then (Term.black, Term.cyan)
                     else if isSel then (Term.black, Term.magenta)
                     else (Term.cyan ||| Term.underline, Term.default)
-    Term.printPad x.toUInt32 y w.toUInt32 fg bg col.name
+    Term.printPad x.toUInt32 y w.toUInt32 fg bg name
 
 -- | Render single data row with decimal precision (highlights selected cols/rows)
-def row (t : Table) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
+def row (st : SomeTable) (cols : Array ColPos) (rowIdx curRow curCol decimals : Nat)
         (y : UInt32) (selCols : List Nat := []) (selRows : List Nat := []) : IO Unit := do
-  let cells := t.rows.getD rowIdx #[]
   let isCurRow := rowIdx == curRow
   let isSelRow := selRows.contains rowIdx
   for (i, x, w) in cols do
-    let cell := cells.getD i .null
+    let cell := st.table.getIdx rowIdx i
     let isCursor := isCurRow && i == curCol
     let isSel := selCols.contains i
     let (fg, bg) := if isCursor then (Term.black, Term.white)
@@ -230,44 +230,6 @@ theorem adjustKeyCols_ex1 : adjustKeyCols [10] 5 = [9] := by native_decide
 theorem adjustKeyCols_ex2 : adjustKeyCols [3, 10] 5 = [3, 9] := by native_decide
 theorem adjustKeyCols_ex3 : adjustKeyCols [5, 10] 5 = [9] := by native_decide  -- 5 deleted
 
--- | Navigation should follow display order (next column in display)
-def nextInDisplay (keyIdxs : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
-  let order := displayOrder keyIdxs nCols
-  match order.findIdx? (· == cur) with
-  | some i => order.getD (i + 1) cur  -- next in order, or stay
-  | none => cur
-
-def prevInDisplay (keyIdxs : List Nat) (nCols : Nat) (cur : Nat) : Nat :=
-  let order := displayOrder keyIdxs nCols
-  match order.findIdx? (· == cur) with
-  | some 0 => cur  -- at start, stay
-  | some i => order.getD (i - 1) cur
-  | none => cur
-
--- | Navigation with key column names
-def nextInDisplayN (keyCols : List String) (colNames : Array String) (cur : Nat) : Nat :=
-  nextInDisplay (resolveKeyCols keyCols colNames) colNames.size cur
-
-def prevInDisplayN (keyCols : List String) (colNames : Array String) (cur : Nat) : Nat :=
-  prevInDisplay (resolveKeyCols keyCols colNames) colNames.size cur
-
--- | Theorem: next in display advances in display order
--- keyCols=[1], 3 cols → display order is [1,0,2], cursor on 1 → next is 0
-theorem nextInDisplay_example :
-    nextInDisplay [1] 3 1 = 0 := by native_decide
-
--- | Theorem: with no key cols, next is just increment
-theorem nextInDisplay_noKeys :
-    nextInDisplay [] 5 2 = 3 := by native_decide
-
--- | Theorem: prev from first key col stays (can't go left of leftmost)
-theorem prevInDisplay_atStart :
-    prevInDisplay [1] 3 1 = 1 := by native_decide
-
--- | Theorem: prev from non-key goes to key col
-theorem prevInDisplay_toKey :
-    prevInDisplay [1] 3 0 = 1 := by native_decide
-
 -- | Cursor row is visible: startRow ≤ curRow < endRow
 -- Given visRows and curRow, compute visible range containing cursor
 def rowVisible (curRow visRows : Nat) : Nat × Nat :=
@@ -283,17 +245,21 @@ theorem cursorRowVisible (curRow visRows : Nat) (hPos : visRows > 0) :
 -- Note: cursor column visibility proven by VisRange.hVis : offset ≤ cursor
 
 -- | Render table with nav state, returns (offset, cols, keyW)
-def table (t : Table) (nav : NavState) (screenH screenW : Nat)
+def table (st : SomeTable) (nav : PureState) (screenH screenW : Nat)
           (decimals : Nat := 3)
-          (selCols : List Nat := []) (selRows : List Nat := []) : IO (Nat × Array ColPos × Nat) := do
+          (selCols : List DispIdx := []) (selRows : List Nat := []) : IO (Nat × Array ColPos × Nat) := do
   Term.clear
-  let widths := t.colWidths
-  let colNames := t.cols.map (·.name)
+  let widths := st.table.colWidths
+  let colNames := st.table.colNames
   let keyIdxs := resolveKeyCols nav.keyCols colNames
   let curRow := nav.rowCur
-  let curCol := nav.colCur
+  let colOff := nav.colOff.val
+  -- convert display indices to original column indices for header/row
+  let dispCols := displayCols nav.keyCols colNames
+  let curColOrig := colIndex (dispCols.getDisp nav.colCur "") colNames
+  let selColIdxs := selCols.map fun d => colIndex (dispCols.getDisp d "") colNames
   -- all columns scroll together (no pinning)
-  let vr := visibleRange widths nav.colOff curCol screenW keyIdxs
+  let vr := visibleRange widths colOff nav.colCur.val screenW keyIdxs
   let cols := vr.cols
   -- find separator position: after last visible key column (at column gap)
   let visibleKeyIdxs := keyIdxs.filter fun k => cols.any fun (i, _, _) => i == k
@@ -303,14 +269,14 @@ def table (t : Table) (nav : NavState) (screenH screenW : Nat)
   -- row range (screenH-1: 1 for header at top)
   let visRows := screenH - 1
   let startRow := if curRow < visRows then 0 else curRow - visRows + 1
-  let endRow := min t.nRows (startRow + visRows)
+  let endRow := min st.nRows (startRow + visRows)
   -- render header
-  header t cols curCol 0 selCols
+  header st cols curColOrig 0 selColIdxs
   if sepX > 0 then Term.print sepX.toUInt32 0 Term.default Term.default "|"
   -- render data rows
   for i in [:endRow - startRow] do
     let ri := startRow + i
-    row t cols ri curRow curCol decimals (i + 1).toUInt32 selCols selRows
+    row st cols ri curRow curColOrig decimals (i + 1).toUInt32 selColIdxs selRows
     if sepX > 0 then Term.print sepX.toUInt32 (i + 1).toUInt32 Term.default Term.default "|"
   return (vr.offset, cols, sepX)
 
@@ -378,15 +344,15 @@ def tabLine (views : List (String × String × String)) (y : UInt32) (screenW : 
     if i == n - 1 then s!"[{lbl}]" else lbl
   Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (String.intercalate " | " marked)
 
--- | Render status bar at bottom (keyCols is List String now)
-def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : List String) (selCols selRows : List Nat)
+-- | Render status bar at bottom
+def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : List String) (selCols : List DispIdx) (selRows : List Nat)
               (colNames : Array String) (y : UInt32) (msg : String := "") : IO Unit := do
   -- left side: message or key/sel columns/rows
   let dispCols := displayCols keyCols colNames
   let left := if msg.isEmpty then
     let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.length} "
     let selStr := if selCols.isEmpty then ""
-      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun i => dispCols.getD i "?")
+      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun d => dispCols.getDisp d "?")
     let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.length}"
     s!"{keyStr}{selStr}{rowStr}"
   else msg
@@ -412,7 +378,7 @@ def keyHints : List (String × String) := [
 ]
 
 -- | Render info overlay at bottom-right (key | hint)
-def infoOverlay (_ : Table) (_ _ : Nat) (screenH screenW : Nat) : IO Unit := do
+def infoOverlay (_ : SomeTable) (_ _ : Nat) (screenH screenW : Nat) : IO Unit := do
   let nRows := keyHints.length
   let keyW := 5; let hintW := 10
   let boxW := keyW + 1 + hintW

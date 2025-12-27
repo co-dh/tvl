@@ -60,37 +60,7 @@ structure KeyCtx where
 -- | Key handler result
 abbrev KeyResult := IO State
 
-/-! ## Pure State Transition with Visibility Proof -/
-
--- | Pure state with bounded cursors (Fin ensures in-bounds at compile time)
-structure PureState (nRows nCols : Nat) where
-  rowCur  : Fin (nRows + 1)   -- +1 allows cursor 0 even for empty table
-  rowOff  : Nat
-  colCur  : Fin (nCols + 1)
-  colOff  : Nat
-  keyCols : List String
-  delCols : List String
-
--- | Extract pure state from View + DisplayInfo (clamps to valid range)
-def View.toPure (v : View) (nRows nCols : Nat) : PureState nRows nCols :=
-  ⟨⟨min v.nav.rowCur nRows, Nat.lt_succ_of_le (Nat.min_le_right _ _)⟩,
-   v.nav.rowOff,
-   ⟨min v.nav.colCur nCols, Nat.lt_succ_of_le (Nat.min_le_right _ _)⟩,
-   v.nav.colOff,
-   v.nav.keyCols,
-   v.nav.delCols⟩
-
--- | Convert PureState back to NavState
-def PureState.toNavState {nRows nCols : Nat} (p : PureState nRows nCols) : NavState :=
-  ⟨p.rowCur.val, p.rowOff, p.colCur.val, p.colOff, p.keyCols, p.delCols⟩
-
--- | Apply navigation state back to View
-def View.applyNav (v : View) (nav : NavState) : View :=
-  { v with nav := nav }
-
--- | Clamp Nat to Fin (n+1), ensures 0..n
-def mkFin (n val : Nat) : Fin (n + 1) :=
-  ⟨min val n, Nat.lt_succ_of_le (Nat.min_le_right _ _)⟩
+/-! ## Navigation -/
 
 -- | Navigation keys (pure, no IO)
 inductive NavKey where
@@ -121,44 +91,37 @@ def adjustColOff (colOff colCur : Nat) (dispCols : Array String) (colNames : Arr
     else if colCur >= colOff + visCols then colCur - visCols + 1  -- scroll right
     else colOff  -- already visible
 
-
--- | Pure navigation: colCur is position in display order (0 to nCols-1)
--- nRows/nCols are type parameters, rowCur/colCur are Fin (n+1)
-def handleNav {nRows nCols : Nat} (s : PureState nRows nCols) (key : NavKey) (_screenW visRows : Nat) : PureState nRows nCols :=
-  let lastRow := if nRows > 0 then nRows - 1 else 0  -- valid cursor range: 0..nRows-1
+-- | Pure navigation on PureState
+-- nRows: total rows in table (for clamping row cursor)
+-- nCols: total columns in display order (for clamping col cursor)
+-- visRows: visible rows on screen (for Ctrl-D/U page jumps)
+def handleNav (s : PureState) (key : NavKey) (nRows nCols visRows : Nat) : PureState :=
+  let lastRow := if nRows > 0 then nRows - 1 else 0
   let lastCol := if nCols > 0 then nCols - 1 else 0
   match key with
-  | .j => { s with rowCur := mkFin nRows (min (s.rowCur.val + 1) lastRow) }
-  | .k => { s with rowCur := mkFin nRows (s.rowCur.val - 1) }  -- saturating sub
-  | .l => { s with colCur := mkFin nCols (min (s.colCur.val + 1) lastCol) }
-  | .h => { s with colCur := mkFin nCols (if s.colCur.val > 0 then s.colCur.val - 1 else 0) }
-  | .g => { s with rowCur := ⟨0, Nat.zero_lt_succ _⟩ }
-  | .G => { s with rowCur := mkFin nRows lastRow }
-  | .zero => { s with colCur := ⟨0, Nat.zero_lt_succ _⟩, colOff := 0 }
-  | .dollar => { s with colCur := mkFin nCols lastCol }
-  | .ctrlD => { s with rowCur := mkFin nRows (min (s.rowCur.val + visRows) lastRow) }
-  | .ctrlU => { s with rowCur := mkFin nRows (s.rowCur.val - min s.rowCur.val visRows) }
-  | .retMeta sel => { s with keyCols := sel, colCur := ⟨0, Nat.zero_lt_succ _⟩, colOff := 0 }
+  | .j => { s with rowCur := min (s.rowCur + 1) lastRow }
+  | .k => { s with rowCur := s.rowCur - 1 }  -- saturating
+  | .l => { s with colCur := ⟨min (s.colCur.val + 1) lastCol⟩ }
+  | .h => { s with colCur := ⟨if s.colCur.val > 0 then s.colCur.val - 1 else 0⟩ }
+  | .g => { s with rowCur := 0 }
+  | .G => { s with rowCur := lastRow }
+  | .zero => { s with colCur := ⟨0⟩, colOff := ⟨0⟩ }
+  | .dollar => { s with colCur := ⟨lastCol⟩ }
+  | .ctrlD => { s with rowCur := min (s.rowCur + visRows) lastRow }
+  | .ctrlU => { s with rowCur := s.rowCur - min s.rowCur visRows }
+  | .retMeta sel => { s with keyCols := sel, colCur := ⟨0⟩, colOff := ⟨0⟩ }
 
--- | Concrete test: with keyCols ["c","d"], colCur=3, l moves to 4
-theorem handleNav_l_increment :
-    let s : PureState 10 5 := ⟨⟨0, by omega⟩, 0, ⟨3, by omega⟩, 0, ["c", "d"], []⟩
-    let s' := handleNav s .l 45 23
-    s'.colCur.val = 4 := by native_decide
-
+-- | Run navigation and adjust offset
 def runNav (c : KeyCtx) (key : NavKey) : State :=
-  let p := c.v.toPure c.di.nRows c.di.nCols
-  let p' := handleNav p key c.sw c.pg
-  -- Adjust offset to keep cursor visible
-  let dispCols := Render.displayCols p'.keyCols c.di.colNames
-  let newOff := adjustColOff p'.colOff p'.colCur dispCols c.di.colNames c.di.colWidths c.sw
-  let nav := { p'.toNavState with colOff := newOff }
-  c.s.setCur (c.v.applyNav nav)
+  let nav' := handleNav c.v.nav key c.di.nRows c.di.nCols c.pg
+  let dispCols := Render.displayCols nav'.keyCols c.di.colNames
+  let newOff := adjustColOff nav'.colOff.val nav'.colCur.val dispCols c.di.colNames c.di.colWidths c.sw
+  c.s.setCur { c.v with nav := { nav' with colOff := ⟨newOff⟩ } }
 
 -- | Get column name at current cursor (display) position
 def curColName (c : KeyCtx) : String :=
   let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
-  dispCols.getD c.v.nav.colCur "?"
+  dispCols.getDisp c.v.nav.colCur "?"
 
 -- | Get column index at current cursor (display) position
 def curColIdx (c : KeyCtx) : Nat :=
@@ -189,23 +152,23 @@ theorem isFullNull_0 : isFullNull "0%" = false := rfl
 theorem isFullNull_50 : isFullNull "50%" = false := rfl
 
 -- | Pure: select rows where null% column is "100%"
-def selectFullNull (tbl : Table) : List Nat :=
-  (List.range tbl.nRows).filter fun r =>
-    match tbl.get r metaColNull with
+def selectFullNull (st : SomeTable) : List Nat :=
+  (List.range st.nRows).filter fun r =>
+    match st.table.getIdx r metaColNull with
     | .str s => isFullNull s
     | _ => false
 
 -- | Theorem: selectFullNull filters exactly rows with isFullNull (by def)
-theorem selectFullNull_def (tbl : Table) :
-    selectFullNull tbl = (List.range tbl.nRows).filter fun r =>
-      match tbl.get r metaColNull with | .str s => isFullNull s | _ => false := rfl
+theorem selectFullNull_def (st : SomeTable) :
+    selectFullNull st = (List.range st.nRows).filter fun r =>
+      match st.table.getIdx r metaColNull with | .str s => isFullNull s | _ => false := rfl
 
 -- | 0 - first column (meta: select rows with 100% null)
 def zero (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
   | .colMeta =>
     match c.v.cache with
-    | some tbl => pure (c.s.setCur { c.v with selRows := selectFullNull tbl })
+    | some st => pure (c.s.setCur { c.v with selRows := selectFullNull st })
     | none => pure c.s
   | _ => pure (runNav c .zero)
 
@@ -214,10 +177,9 @@ def one (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
   | .colMeta =>
     match c.v.cache with
-    | some tbl =>
-      -- select rows where dist column == 1
-      let sel := (List.range tbl.nRows).filter fun r =>
-        match tbl.get r metaColDist with
+    | some st =>
+      let sel := (List.range st.nRows).filter fun r =>
+        match st.table.getIdx r metaColDist with
         | .int n => n == 1
         | _ => false
       pure (c.s.setCur { c.v with selRows := sel })
@@ -227,63 +189,47 @@ def one (c : KeyCtx) : KeyResult := do
 -- | $ - last column
 def dollar (c : KeyCtx) : KeyResult := pure (runNav c .dollar)
 
--- | [ - sort ascending
+-- | [ - sort ascending (via PRQL)
 def lbrak (c : KeyCtx) : KeyResult := do
-  match c.v.vkind with
-  | .colMeta =>  -- sort cached table in-memory
-    match c.v.cache with
-    | some tbl =>
-      let sorted := tbl.sortBy (curColIdx c) true
-      pure (c.s.setCur { c.v with cache := some sorted })
-    | none => pure c.s
-  | _ =>
-    let prql := (Prql.Query.parse c.v.prql).sortAsc (curColName c) |>.render
-    pure (c.s.setCur (c.v.copy (prql := prql)))
+  let prql := (Prql.Query.parse c.v.prql).sortAsc (curColName c) |>.render
+  pure (c.s.setCur (c.v.copy (prql := prql)))
 
--- | ] - sort descending
+-- | ] - sort descending (via PRQL)
 def rbrak (c : KeyCtx) : KeyResult := do
-  match c.v.vkind with
-  | .colMeta =>  -- sort cached table in-memory
-    match c.v.cache with
-    | some tbl =>
-      let sorted := tbl.sortBy (curColIdx c) false
-      pure (c.s.setCur { c.v with cache := some sorted })
-    | none => pure c.s
-  | _ =>
-    let prql := (Prql.Query.parse c.v.prql).sortDesc (curColName c) |>.render
-    pure (c.s.setCur (c.v.copy (prql := prql)))
+  let prql := (Prql.Query.parse c.v.prql).sortDesc (curColName c) |>.render
+  pure (c.s.setCur (c.v.copy (prql := prql)))
 
 -- | D - delete column(s) using DuckDB EXCLUDE syntax
 def D (c : KeyCtx) : KeyResult := do
-  -- Get display columns and names to delete
   let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
-  let delPos := if c.v.selCols.isEmpty then [c.v.nav.colCur] else c.v.selCols
-  let delNames := delPos.map fun p => dispCols.getD p "?"
-  -- Merge with existing deleted columns
+  let curIdx := c.v.nav.colCur
+  let delPos := if c.v.selCols.isEmpty then [curIdx] else c.v.selCols
+  let delNames := delPos.map fun p => dispCols.getDisp p "?"
   let allDelCols := c.v.nav.delCols ++ delNames.filter (!c.v.nav.delCols.contains ·)
   let keepCount := c.di.nCols - delNames.length
   if keepCount > 0 then
-    -- Build PRQL from base "from df" + single EXCLUDE with all deleted cols
     let prql := (Prql.Query.new "df").exclude allDelCols |>.render
     let delStr := String.intercalate "," allDelCols
     let newDisp := s!"del {delStr}"
-    -- keyCols: just remove deleted names
     let newKeyCols := c.v.nav.keyCols.filter (!delNames.contains ·)
-    -- Cursor: clamp to valid range
-    let newCursor := min c.v.nav.colCur (keepCount - 1)
-    let newOffset := min c.v.nav.colOff (keepCount - 1)
-    let newNav := { c.v.nav with colCur := newCursor, colOff := newOffset, keyCols := newKeyCols, delCols := allDelCols }
-    let v' := { c.v.copy (prql := prql) (nav := newNav) with disp := newDisp, selCols := [] }
+    let maxCol := keepCount - 1
+    let nav' := { c.v.nav with
+      colCur := ⟨min curIdx.val maxCol⟩
+      colOff := ⟨min c.v.nav.colOff.val maxCol⟩
+      keyCols := newKeyCols
+      delCols := allDelCols }
+    let v' := { c.v.copy (prql := prql) with nav := nav', disp := newDisp, selCols := [] }
     pure (c.s.setCur v'.invalidate)
   else pure c.s
 
--- | @ - column jump with fzf
+-- | @ - column jump with fzf (finds DispIdx in display order)
 def atSign (c : KeyCtx) : KeyResult := do
   let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
   match ← runFzf ["--prompt=Column: "] colNamesStr with
   | some col =>
-    match c.di.colNames.toList.findIdx? (· == col) with
-    | some idx => pure (c.s.setCur { c.v with nav := NavState.goto idx c.di.nCols })
+    let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
+    match dispCols.findDispIdx? (· == col) with
+    | some idx => pure (c.s.setCur { c.v with nav := { c.v.nav with colCur := idx } })
     | none => pure c.s
   | none => pure c.s
 
@@ -298,7 +244,6 @@ def backslash (c : KeyCtx) : KeyResult := do
       let lines := result.splitOn "\n" |>.filter (!·.isEmpty)
       let query := lines.headD ""
       let fromHints := (lines.tailD []).filter vals.contains
-      -- build filter expression
       let expr := if fromHints.length == 1 then s!"{col} == '{fromHints.head!}'"
         else if fromHints.length > 1 then
           "(" ++ String.intercalate " || " (fromHints.map fun v => s!"{col} == '{v}'") ++ ")"
@@ -309,7 +254,7 @@ def backslash (c : KeyCtx) : KeyResult := do
       if expr.isEmpty then pure c.s
       else
         let prql := (Prql.Query.parse c.v.prql).filter expr |>.render
-        let fv : View := ⟨c.v.path, prql, s!"filter {expr}", NavState.create, .tbl, none, [], [], none, c.v.decimals⟩
+        let fv : View := ⟨c.v.path, prql, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
         pure (c.s.push fv)
     | none => pure c.s
   | .error _ => pure c.s
@@ -330,7 +275,7 @@ def s (c : KeyCtx) : KeyResult := do
 def M (c : KeyCtx) : KeyResult := do
   match ← Backend.queryMeta c.v.prql c.v.path with
   | .ok metaTbl =>
-    let mv : View := ⟨c.v.path, c.v.prql, "meta", NavState.create, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
+    let mv : View := ⟨c.v.path, c.v.prql, "meta", {}, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
     pure (c.s.push mv)
   | .error e => pure (c.s.setMsg s!"meta error: {e}")
 
@@ -339,13 +284,11 @@ def I (c : KeyCtx) : KeyResult := pure { c.s with showInfo := !c.s.showInfo }
 
 -- | F - frequency view (works on any view)
 def F (c : KeyCtx) : KeyResult := do
-  -- keyCols is already List String, or use current col
   let cols := if c.v.nav.keyCols.isEmpty then [curColName c] else c.v.nav.keyCols
   let colStr := String.intercalate "," cols
   let q := Prql.Query.parse c.v.prql
   let prql := if cols.length == 1 then q.freq cols.head! |>.render else q.freqFull cols |>.render
-  -- keyCols for freq view: the grouped column names
-  let nav := { NavState.create with keyCols := cols }
+  let nav : PureState := { keyCols := cols }
   let fv : View := ⟨c.v.path, prql, s!"freq {colStr}", nav, .freqV colStr, none, [], [], none, 3⟩
   pure (c.s.push fv)
 
@@ -360,7 +303,7 @@ def retFreq (c : KeyCtx) (colNames : String) : KeyResult := do
     let expr := String.intercalate " && " filters
     let parentPrql := match c.s.views.tail? with | some (pv :: _) => pv.prql | _ => "from df"
     let prql := (Prql.Query.parse parentPrql).filter expr |>.render
-    let fv : View := ⟨c.v.path, prql, s!"filter {expr}", NavState.create, .tbl, none, [], [], none, c.v.decimals⟩
+    let fv : View := ⟨c.v.path, prql, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
     pure (c.s.push fv)
 
 -- | ret on folder (source:ls): enter folder or open file with bat
@@ -375,7 +318,7 @@ def retFld (c : KeyCtx) : KeyResult := do
       let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
       let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
       if perms.startsWith "d" then
-        let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", NavState.create, .tbl, none, [], [], none, 3⟩
+        let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", {}, .tbl, none, [], [], none, 3⟩
         pure (c.s.push lsv)
       else
         runBat fullPath
@@ -384,7 +327,7 @@ def retFld (c : KeyCtx) : KeyResult := do
 -- | ret on tbl: no-op (could add row details later)
 def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
 
--- | ret on lr (source:lr): open file with bat (lr only lists files, not dirs)
+-- | ret on lr (source:lr): open file with bat
 def retLr (c : KeyCtx) : KeyResult := do
   match ← Backend.queryRow c.v.prql c.v.path c.v.nav.rowCur 7 with
   | .error _ => pure c.s
@@ -395,57 +338,34 @@ def retLr (c : KeyCtx) : KeyResult := do
       runBat path
       pure c.s
 
--- | Theorem: j preserves row visibility (Fin cursor needs .val for Nat comparison)
-theorem handleNav_j_rowVisible {nRows nCols : Nat} (s : PureState nRows nCols) (screenW visRows : Nat) (hH : visRows > 0) :
-    let s' := handleNav s .j screenW visRows
-    Render.rowVisibleP s'.rowCur.val visRows = true := by
-  simp [handleNav]; exact Render.rowVisibleP_always _ _ hH
+-- | Theorem: j increments rowCur (clamped to lastRow)
+theorem handleNav_j_rowCur (s : PureState) (nRows nCols visRows : Nat) :
+    let lastRow := if nRows > 0 then nRows - 1 else 0
+    let s' := handleNav s .j nRows nCols visRows
+    s'.rowCur = min (s.rowCur + 1) lastRow := by simp [handleNav]
 
--- | Theorem: k preserves row visibility
-theorem handleNav_k_rowVisible {nRows nCols : Nat} (s : PureState nRows nCols) (screenW visRows : Nat) (hH : visRows > 0) :
-    let s' := handleNav s .k screenW visRows
-    Render.rowVisibleP s'.rowCur.val visRows = true := by
-  simp [handleNav]; exact Render.rowVisibleP_always _ _ hH
+-- | Theorem: k decrements rowCur (saturating at 0)
+theorem handleNav_k_rowCur (s : PureState) (nRows nCols visRows : Nat) :
+    let s' := handleNav s .k nRows nCols visRows
+    s'.rowCur = s.rowCur - 1 := by simp [handleNav]
 
 -- | Theorem: l increments colCur (clamped to lastCol)
-theorem handleNav_l_colCur {nRows nCols : Nat} (s : PureState nRows nCols) (screenW visRows : Nat) :
+theorem handleNav_l_colCur (s : PureState) (nRows nCols visRows : Nat) :
     let lastCol := if nCols > 0 then nCols - 1 else 0
-    let s' := handleNav s .l screenW visRows
-    s'.colCur.val = min (s.colCur.val + 1) lastCol := by
-  simp only [handleNav, mkFin]
-  sorry  -- proof needs case analysis on nCols
-
--- | Theorem: h decrements colCur (saturating at 0)
-theorem handleNav_h_colCur {nRows nCols : Nat} (s : PureState nRows nCols) (screenW visRows : Nat) :
-    let s' := handleNav s .h screenW visRows
-    s'.colCur.val = if s.colCur.val > 0 then s.colCur.val - 1 else 0 := by
-  simp only [handleNav, mkFin]
-  sorry  -- proof needs case split
+    let s' := handleNav s .l nRows nCols visRows
+    s'.colCur.val = min (s.colCur.val + 1) lastCol := by simp [handleNav]
 
 -- | Theorem: retMeta sets keyCols = sel, cursor = 0
-theorem handleNav_retMeta_cursor {nRows nCols : Nat} (s : PureState nRows nCols) (sel : List String) (screenW visRows : Nat) :
-    let s' := handleNav s (.retMeta sel) screenW visRows
-    s'.colCur.val = 0 ∧ s'.keyCols = sel := by
-  simp [handleNav]
+theorem handleNav_retMeta_cursor (s : PureState) (sel : List String) (nRows nCols visRows : Nat) :
+    let s' := handleNav s (.retMeta sel) nRows nCols visRows
+    s'.colCur.val = 0 ∧ s'.keyCols = sel := by simp [handleNav]
 
--- | Main theorem: all nav keys preserve row visibility
-theorem handleNav_rowVisible {nRows nCols : Nat} (s : PureState nRows nCols) (key : NavKey) (screenW visRows : Nat) (hH : visRows > 0) :
-    let s' := handleNav s key screenW visRows
-    Render.rowVisibleP s'.rowCur.val visRows = true := by
-  cases key <;> simp [handleNav, mkFin] <;> exact Render.rowVisibleP_always _ _ hH
-
--- | Theorem: g preserves row visibility (goes to row 0)
-theorem handleNav_g_rowVisible {nRows nCols : Nat} (s : PureState nRows nCols) (screenW visRows : Nat) (hH : visRows > 0) :
-    let s' := handleNav s .g screenW visRows
-    Render.rowVisibleP s'.rowCur.val visRows = true := by
-  simp [handleNav]; exact Render.rowVisibleP_always 0 _ hH
-
--- | Pure: pop meta view and set parent's keyCols (works with non-empty State)
+-- | Pure: pop meta view and set parent's keyCols
 def popMetaState (s : State) (selColNames : List String) : State :=
   match s.parents with
   | parent :: rest =>
-    let newNav := { parent.nav with keyCols := selColNames, colCur := 0, colOff := 0 }
-    let parent' := { parent with nav := newNav }
+    let nav' := { parent.nav with keyCols := selColNames, colCur := ⟨0⟩, colOff := ⟨0⟩ }
+    let parent' := { parent with nav := nav' }
     { s with curView := parent', parents := rest }
   | [] => s  -- no parent, stay on current
 
@@ -453,38 +373,22 @@ def popMetaState (s : State) (selColNames : List String) : State :=
 theorem popMetaState_keyCols (cur parent : View) (rest : List View) (sel : List String) :
     let s : State := { curView := cur, parents := parent :: rest }
     let s' := popMetaState s sel
-    s'.curView.nav.keyCols = sel := by
-  simp [popMetaState]
+    s'.curView.nav.keyCols = sel := by simp [popMetaState]
 
 -- | Get column names from selected rows in meta table (col 0 is "name")
-def metaSelNames (tbl : Table) (selRows : List Nat) : List String :=
+def metaSelNames (st : SomeTable) (selRows : List Nat) : List String :=
   selRows.filterMap fun r =>
-    match tbl.get r 0 with
+    match st.table.getIdx r 0 with
     | .str s => some s
     | _ => none
-
--- | Theorem: M 0 <ret> returns with keyCols = metaSelNames (column names from selected rows)
-theorem meta0ret_keyCols (tbl : Table) (selRows : List Nat) (cur parent : View) (rest : List View) :
-    let selNames := metaSelNames tbl selRows
-    let s : State := { curView := cur, parents := parent :: rest }
-    let s' := popMetaState s selNames
-    s'.curView.nav.keyCols = selNames := by
-  simp [popMetaState]
-
--- | Theorem: adjustColOff ensures cursor visible (scroll if needed)
-theorem adjustColOff_cursorVisible (colOff colCur : Nat) (dispCols colNames : Array String)
-    (widths : Array Nat) (screenW : Nat) :
-    let newOff := adjustColOff colOff colCur dispCols colNames widths screenW
-    newOff ≤ colCur := by
-  sorry  -- needs more careful proof about visColCount
 
 -- | ret on colMeta: pop to parent with selected column names as keyCols
 def retMeta (c : KeyCtx) : KeyResult := do
   if c.v.selRows.isEmpty then pure c.s
   else
     match c.v.cache with
-    | some tbl =>
-      let selNames := metaSelNames tbl c.v.selRows
+    | some st =>
+      let selNames := metaSelNames st c.v.selRows
       pure (popMetaState c.s selNames)
     | none => pure c.s
 
@@ -508,19 +412,26 @@ def S (c : KeyCtx) : KeyResult := pure c.s.swapViews
 -- | ! - toggle key column (keyCols is List String)
 def excl (c : KeyCtx) : KeyResult := do
   let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
+  -- Get cursor column NAME before changing keys
+  let curName := dispCols.getDisp c.v.nav.colCur "?"
   -- Convert display positions to column names
   let colPos := if c.v.selCols.isEmpty then [c.v.nav.colCur] else c.v.selCols
-  let colNames := colPos.map fun p => dispCols.getD p "?"
+  let colNames := colPos.map fun p => dispCols.getDisp p "?"
   let allIn := colNames.all c.v.nav.keyCols.contains
   let newKeys := if allIn then c.v.nav.keyCols.filter (!colNames.contains ·)
                  else c.v.nav.keyCols ++ colNames.filter (!c.v.nav.keyCols.contains ·)
-  pure (c.s.setCur { c.v with nav := { c.v.nav with keyCols := newKeys }, selCols := [] })
+  -- Find cursor's new position in new display order
+  let newDispCols := Render.displayCols newKeys c.di.colNames
+  match newDispCols.findDispIdx? (· == curName) with
+  | some newCur =>
+    let nav' := { c.v.nav with keyCols := newKeys, colCur := newCur }
+    pure (c.s.setCur { c.v with nav := nav', selCols := [] })
+  | none => pure c.s
 
 -- | Space - toggle column selection (or row selection in meta view)
 def space (c : KeyCtx) : KeyResult := do
   match c.v.vkind with
   | .colMeta =>
-    -- In meta view, toggle row selection (for setting keyCols on return)
     let row := c.v.nav.rowCur
     let newSel := if c.v.selRows.contains row then c.v.selRows.filter (· != row)
                   else c.v.selRows ++ [row]
@@ -536,14 +447,14 @@ def parseAgg : String → Option Prql.Agg
   | "count" => some .count | "sum" => some .sum | "average" => some .avg
   | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
 
--- | b - aggregate by key columns (keyCols is List String)
+-- | b - aggregate by key columns
 def b (c : KeyCtx) : KeyResult := do
   if c.v.nav.keyCols.isEmpty then pure { c.s with msg := "Set key columns first with !" }
   else
     let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
-    let keyNames := c.v.nav.keyCols  -- already List String
+    let keyNames := c.v.nav.keyCols
     let aggPos := if c.v.selCols.isEmpty then [c.v.nav.colCur] else c.v.selCols
-    let aggNames := aggPos.map fun p => dispCols.getD p "?"
+    let aggNames := aggPos.map fun p => dispCols.getDisp p "?"
     if aggNames.isEmpty then pure { c.s with msg := "No columns to aggregate" }
     else
       let funcs ← if c.s.testMode then pure [Prql.Agg.sum]
@@ -556,7 +467,7 @@ def b (c : KeyCtx) : KeyResult := do
       if funcs.isEmpty then pure c.s
       else
         let prql := (Prql.Query.parse c.v.prql).agg keyNames funcs aggNames |>.render
-        let av : View := ⟨c.v.path, prql, "agg", NavState.create, .tbl, none, [], [], none, 3⟩
+        let av : View := ⟨c.v.path, prql, "agg", {}, .tbl, none, [], [], none, 3⟩
         let s' := c.s.setCur { c.v with selCols := [] }
         pure (s'.push av)
 
@@ -566,7 +477,7 @@ def colon (c : KeyCtx) : KeyResult := do
   else
     match ← runFzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" with
     | some cmd =>
-      let sv : View := ⟨s!"source:{cmd}", "from df", "", NavState.create, .tbl, none, [], [], none, 3⟩
+      let sv : View := ⟨s!"source:{cmd}", "from df", "", {}, .tbl, none, [], [], none, 3⟩
       pure (c.s.push sv)
     | none => pure c.s
 
@@ -585,13 +496,13 @@ def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with decimals := if
 def L (c : KeyCtx) : KeyResult := do
   match ← runFzf ["--prompt=Load: "] "" with
   | some path =>
-    let lv : View := ⟨path, "from df", "", NavState.create, .tbl, none, [], [], none, 3⟩
+    let lv : View := ⟨path, "from df", "", {}, .tbl, none, [], [], none, 3⟩
     pure (c.s.push lv)
   | none => pure c.s
 
 -- | r - recursive file listing
 def r (c : KeyCtx) : KeyResult := do
-  let rv : View := ⟨"source:lr:.", "from df", "lr ./", NavState.create, .tbl, none, [], [], none, 3⟩
+  let rv : View := ⟨"source:lr:.", "from df", "lr ./", {}, .tbl, none, [], [], none, 3⟩
   pure (c.s.push rv)
 
 -- | q - quit/pop
@@ -603,7 +514,7 @@ def q (c : KeyCtx) : KeyResult := do
 def esc (c : KeyCtx) : KeyResult := do
   if !c.v.selCols.isEmpty then pure (c.s.setCur { c.v with selCols := [] })
   else if !c.v.selRows.isEmpty then pure (c.s.setCur { c.v with selRows := [] })
-  else pure c.s  -- no-op if nothing selected
+  else pure c.s
 
 -- | Ctrl-C - quit
 def ctrlC (_ : KeyCtx) (s : State) : KeyResult := pure { s with quit := true }
