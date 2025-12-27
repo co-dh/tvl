@@ -119,8 +119,8 @@ partial def loop (s : State) : IO Unit := do
   if s.quit then return ()
   let v := s.cur
   -- fetch table (uses cache if available)
-  let (v', tbl) ← v.fetch
-  let s := s.setCur v'
+  let (v', tbl, fetchErr) ← v.fetch
+  let s := { s.setCur v' with err := fetchErr }
   -- extract display info (only way to get metadata for handleKey)
   let di := tbl.table.info
   -- render based on view kind (tbl only used here for rendering)
@@ -137,7 +137,7 @@ partial def loop (s : State) : IO Unit := do
   let views := s.views.map fun v => (v.path, v.disp, v.prql)
   Render.tabLine views (h - 2) w.toNat
   Render.statusBar v'.nav.rowCur v'.nav.colCur.val v'.nav.colOff.val (v'.total.getD di.nRows) w.toNat
-                   v'.nav.keyCols v'.selCols v'.selRows di.colNames (h - 1) s.msg
+                   v'.nav.keyCols v'.selCols v'.selRows di.colNames (h - 1) s.msg s.err
   if s.showInfo then Render.infoOverlay tbl curColOrig v'.nav.rowCur h.toNat w.toNat
   Term.present
   let newColOffset := off

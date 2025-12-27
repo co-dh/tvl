@@ -331,21 +331,22 @@ def tabLine (views : List (String × String × String)) (y : UInt32) (screenW : 
 
 -- | Render status bar at bottom
 def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : List String) (selCols : List DispIdx) (selRows : List Nat)
-              (colNames : Array String) (y : UInt32) (msg : String := "") : IO Unit := do
-  -- left side: message or key/sel columns/rows
+              (colNames : Array String) (y : UInt32) (msg : String := "") (err : String := "") : IO Unit := do
+  -- left side: error (red), message, or key/sel columns/rows
   let dispCols := displayCols keyCols colNames
-  let left := if msg.isEmpty then
-    let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.length} "
-    let selStr := if selCols.isEmpty then ""
-      else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun d => dispCols.getDisp d "?")
-    let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.length}"
-    s!"{keyStr}{selStr}{rowStr}"
-  else msg
+  let (left, fg) := if !err.isEmpty then (err.take (screenW - 20), Term.red)
+    else if !msg.isEmpty then (msg, Term.cyan)
+    else
+      let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.length} "
+      let selStr := if selCols.isEmpty then ""
+        else s!"sel={selCols.length} *" ++ String.intercalate "," (selCols.map fun d => dispCols.getDisp d "?")
+      let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.length}"
+      (s!"{keyStr}{selStr}{rowStr}", Term.cyan)
   -- right side: col info + mem + row/total
   let mb ← memMB
   let right := s!"c{curCol}+{colOff} {mb}MB {curRow}/{fmtNum total}"
   -- print left, then right-aligned position
-  Term.print 0 y Term.cyan Term.default left
+  Term.print 0 y fg Term.default left
   let rx := screenW - right.length
   Term.print rx.toUInt32 y Term.cyan Term.default right
 

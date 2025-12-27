@@ -54,6 +54,7 @@ structure State where
   parents   : List View := [] -- parent views (can be empty)
   keys      : List Char := [] -- pending keys to replay
   msg       : String := ""    -- status message
+  err       : String := ""    -- error message (shown in red)
   quit      : Bool := false
   testMode  : Bool := false   -- exit after keys consumed
   inputMode : InputMode := .none  -- current input mode
@@ -95,10 +96,10 @@ def State.setMsg (s : State) (m : String) : State := { s with msg := m }
 -- | Max rows to fetch (prevent OOM on huge files)
 def maxRows : Nat := 1000
 
--- | Fetch table for view (uses cache or queries backend)
-def View.fetch (v : View) : IO (View × SomeTable) := do
+-- | Fetch table for view (uses cache or queries backend). Returns error msg if any.
+def View.fetch (v : View) : IO (View × SomeTable × String) := do
   match v.cache with
-  | some st => return (v, st)
+  | some st => return (v, st, "")
   | none =>
     match ← Backend.query (Backend.mkLimited v.prql maxRows) v.path with
     | .ok st =>
@@ -107,10 +108,12 @@ def View.fetch (v : View) : IO (View × SomeTable) := do
         | none => match ← Backend.queryCount v.prql v.path with
           | .ok n => pure n
           | .error _ => pure st.nRows
-      return ({ v with cache := some st, total := some total }, st)
+      return ({ v with cache := some st, total := some total }, st, "")
     | .error e =>
       Backend.logError s!"Query error: {e}"
-      return (v, ⟨0, Table.empty⟩)
+      -- Extract short error (first line after "Error:")
+      let short := e.splitOn "───" |>.head? |>.getD e |>.take 80
+      return (v, ⟨0, Table.empty⟩, short)
 
 -- | Invalidate cache (after PRQL change)
 def View.invalidate (v : View) : View := { v with cache := none }
