@@ -83,8 +83,8 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   else if ev.ch == ch0 then pure (runKey c ._0 s)
   else if ev.ch == ch1 then pure (runKey c ._1 s)
   else if ev.ch == chDollar then pure (runKey c .dollar s)
-  else if ev.ch == chLBrack then pure (runKey c .sortAsc s)
-  else if ev.ch == chRBrack then pure (runKey c .sortDesc s)
+  else if ev.ch == chLBrack then pure (runKey c .asc s)
+  else if ev.ch == chRBrack then pure (runKey c .desc s)
   else if ev.ch == chD then pure (runKey c .D s)
   else if ev.ch == chAt then Key.atSign c s
   else if ev.ch == chBackslash then Key.backslash c s

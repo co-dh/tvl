@@ -63,7 +63,7 @@ inductive PureKey where
   | j | k | l | h | g | G | _0 | _1 | dollar | c_d | c_u
   | colJump (idx : DispIdx)
   -- view transforms
-  | sortAsc | sortDesc | D | toggleInfo | dup | swap
+  | asc | desc | D | toggleInfo | dup | swap
   | toggleKey | toggleSel | incDec (inc : Bool) | quit | clearSel
   -- views (push new view)
   | freq | lr | pushFilter (expr : String) | selectCols (cols : Array String)
@@ -233,8 +233,8 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .c_u => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - min n.rowCur c.pg } }
   | _, .colJump idx => s.setCur { c.v with nav := adjOff c { n with colCur := idx } }
   -- view transforms
-  | _, .sortAsc => s.setCur (sortBy c.v (curColName c) true)
-  | _, .sortDesc => s.setCur (sortBy c.v (curColName c) false)
+  | _, .asc => s.setCur (sortBy c.v (curColName c) true)
+  | _, .desc => s.setCur (sortBy c.v (curColName c) false)
   | _, .D => delCols c.v c.di |>.map s.setCur |>.getD s
   | _, .toggleInfo => { s with showInfo := !s.showInfo }
   | _, .dup => s.dupView
