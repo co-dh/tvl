@@ -60,7 +60,7 @@ abbrev KeyResult := IO State
 -- | All pure key operations
 inductive PureKey where
   -- navigation
-  | j | k | l | h | g | G | _0 | one | dollar | ctrlD | ctrlU
+  | j | k | l | h | g | G | _0 | _1 | dollar | c_d | c_u
   | retMeta (sel : Array String) | colJump (idx : DispIdx)
   -- view transforms
   | sortAsc | sortDesc | D | toggleInfo | dup | swap
@@ -220,7 +220,7 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   match c.v.vkind, key with
   -- colMeta special: 0 selects 100% null, 1 selects single-value
   | .colMeta, ._0 => c.v.cache.map (fun st => s.setCur { c.v with selRows := selectFullNull st }) |>.getD s
-  | .colMeta, .one => c.v.cache.map (fun st => s.setCur { c.v with selRows := selectSingleVal st }) |>.getD s
+  | .colMeta, ._1 => c.v.cache.map (fun st => s.setCur { c.v with selRows := selectSingleVal st }) |>.getD s
   -- navigation: j/k/l/h/g/G/0/$/ctrlD/ctrlU/retMeta/colJump
   | _, .j => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + 1) lastRow } }
   | _, .k => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - 1 } }
@@ -229,10 +229,10 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .g => s.setCur { c.v with nav := adjOff c { n with rowCur := 0 } }
   | _, .G => s.setCur { c.v with nav := adjOff c { n with rowCur := lastRow } }
   | _, ._0 => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨0⟩, colOff := ⟨0⟩ } }
-  | _, .one => s  -- non-colMeta: no-op
+  | _, ._1 => s  -- non-colMeta: no-op
   | _, .dollar => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨lastCol⟩ } }
-  | _, .ctrlD => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + c.pg) lastRow } }
-  | _, .ctrlU => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - min n.rowCur c.pg } }
+  | _, .c_d => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + c.pg) lastRow } }
+  | _, .c_u => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - min n.rowCur c.pg } }
   | _, .retMeta sel => s.setCur { c.v with nav := adjOff c { n with keyCols := sel, colCur := ⟨0⟩, colOff := ⟨0⟩ } }
   | _, .colJump idx => s.setCur { c.v with nav := adjOff c { n with colCur := idx } }
   -- view transforms
