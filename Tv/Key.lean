@@ -123,6 +123,72 @@ def curColName (c : KeyCtx) : String :=
   let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
   dispCols.getDisp c.v.nav.colCur "?"
 
+/-! ## Pure view/state transformations -/
+
+-- | Sort view by column
+def sortBy (v : View) (col : String) (asc : Bool) : View :=
+  v.copy (query := if asc then v.query.sortAsc col else v.query.sortDesc col)
+
+-- | Delete columns from view (returns none if no cols left)
+def delCols (v : View) (di : DisplayInfo) : Option View :=
+  let dispCols := Render.displayCols v.nav.keyCols di.colNames
+  let curIdx := v.nav.colCur
+  let delPos := if v.selCols.isEmpty then [curIdx] else v.selCols
+  let delNames := delPos.map fun p => dispCols.getDisp p "?"
+  let allDelCols := v.nav.delCols ++ delNames.filter (!v.nav.delCols.contains ·)
+  let keepCols := di.colNames.toList.filter (!delNames.contains ·)
+  if keepCols.length > 0 then
+    let maxCol := keepCols.length - 1
+    let nav' := { v.nav with
+      colCur := ⟨min curIdx.val maxCol⟩
+      colOff := ⟨min v.nav.colOff.val maxCol⟩
+      keyCols := v.nav.keyCols.filter (!delNames.contains ·)
+      delCols := allDelCols }
+    some { v.copy (query := v.query.select keepCols) with
+           nav := nav', disp := s!"del {allDelCols.length}", selCols := [] }.invalidate
+  else none
+
+-- | Toggle key column(s)
+def toggleKeyCols (v : View) (di : DisplayInfo) : View :=
+  let dispCols := Render.displayCols v.nav.keyCols di.colNames
+  let curName := dispCols.getDisp v.nav.colCur "?"
+  let colPos := if v.selCols.isEmpty then [v.nav.colCur] else v.selCols
+  let colNames := colPos.map fun p => dispCols.getDisp p "?"
+  let allIn := colNames.all v.nav.keyCols.contains
+  let newKeys := if allIn then v.nav.keyCols.filter (!colNames.contains ·)
+                 else v.nav.keyCols ++ colNames.filter (!v.nav.keyCols.contains ·)
+  let newDispCols := Render.displayCols newKeys di.colNames
+  match newDispCols.findDispIdx? (· == curName) with
+  | some newCur => { v with nav := { v.nav with keyCols := newKeys, colCur := newCur }, selCols := [] }
+  | none => v
+
+-- | Toggle column/row selection
+def toggleSel (v : View) : View :=
+  match v.vkind with
+  | .colMeta =>
+    let row := v.nav.rowCur
+    let newSel := if v.selRows.contains row then v.selRows.filter (· != row) else v.selRows ++ [row]
+    { v with selRows := newSel }
+  | _ =>
+    let col := v.nav.colCur
+    let newSel := if v.selCols.contains col then v.selCols.filter (· != col) else v.selCols ++ [col]
+    { v with selCols := newSel }
+
+-- | Clear selections
+def clearSel (v : View) : Option View :=
+  if !v.selCols.isEmpty then some { v with selCols := [] }
+  else if !v.selRows.isEmpty then some { v with selRows := [] }
+  else none
+
+-- | Adjust decimals
+def adjDecimals (v : View) (inc : Bool) : View :=
+  let d := if inc then v.decimals + 1 else if v.decimals > 0 then v.decimals - 1 else 0
+  { v with decimals := d, cache := none }
+
+-- | Quit or pop view
+def quitOrPop (s : State) : State :=
+  if s.views.length > 1 then s.pop else { s with quit := true }
+
 namespace Key
 
 -- | Navigation handlers use runNav with pure handleNav
@@ -185,34 +251,14 @@ def one (c : KeyCtx) : KeyResult := do
 -- | $ - last column
 def dollar (c : KeyCtx) : KeyResult := pure (runNav c .dollar)
 
--- | [ - sort ascending (via PRQL)
-def lbrak (c : KeyCtx) : KeyResult := do
-  pure (c.s.setCur (c.v.copy (query := c.v.query.sortAsc (curColName c))))
+-- | [ - sort ascending
+def lbrak (c : KeyCtx) : KeyResult := pure (c.s.setCur (sortBy c.v (curColName c) true))
 
--- | ] - sort descending (via PRQL)
-def rbrak (c : KeyCtx) : KeyResult := do
-  pure (c.s.setCur (c.v.copy (query := c.v.query.sortDesc (curColName c))))
+-- | ] - sort descending
+def rbrak (c : KeyCtx) : KeyResult := pure (c.s.setCur (sortBy c.v (curColName c) false))
 
--- | D - delete column(s) using PRQL select whitelist
-def D (c : KeyCtx) : KeyResult := do
-  let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
-  let curIdx := c.v.nav.colCur
-  let delPos := if c.v.selCols.isEmpty then [curIdx] else c.v.selCols
-  let delNames := delPos.map fun p => dispCols.getDisp p "?"
-  let allDelCols := c.v.nav.delCols ++ delNames.filter (!c.v.nav.delCols.contains ·)
-  let keepCols := c.di.colNames.toList.filter (!delNames.contains ·)
-  if keepCols.length > 0 then
-    let newDisp := s!"del {allDelCols.length}"
-    let newKeyCols := c.v.nav.keyCols.filter (!delNames.contains ·)
-    let maxCol := keepCols.length - 1
-    let nav' := { c.v.nav with
-      colCur := ⟨min curIdx.val maxCol⟩
-      colOff := ⟨min c.v.nav.colOff.val maxCol⟩
-      keyCols := newKeyCols
-      delCols := allDelCols }
-    let v' := { c.v.copy (query := c.v.query.select keepCols) with nav := nav', disp := newDisp, selCols := [] }
-    pure (c.s.setCur v'.invalidate)
-  else pure c.s
+-- | D - delete column(s)
+def D (c : KeyCtx) : KeyResult := pure (match delCols c.v c.di with | some v => c.s.setCur v | none => c.s)
 
 -- | @ - column jump with fzf (finds DispIdx in display order)
 def atSign (c : KeyCtx) : KeyResult := do
@@ -398,37 +444,10 @@ def T (c : KeyCtx) : KeyResult := pure c.s.dupView
 def S (c : KeyCtx) : KeyResult := pure c.s.swapViews
 
 -- | ! - toggle key column (keyCols is List String)
-def excl (c : KeyCtx) : KeyResult := do
-  let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
-  -- Get cursor column NAME before changing keys
-  let curName := dispCols.getDisp c.v.nav.colCur "?"
-  -- Convert display positions to column names
-  let colPos := if c.v.selCols.isEmpty then [c.v.nav.colCur] else c.v.selCols
-  let colNames := colPos.map fun p => dispCols.getDisp p "?"
-  let allIn := colNames.all c.v.nav.keyCols.contains
-  let newKeys := if allIn then c.v.nav.keyCols.filter (!colNames.contains ·)
-                 else c.v.nav.keyCols ++ colNames.filter (!c.v.nav.keyCols.contains ·)
-  -- Find cursor's new position in new display order
-  let newDispCols := Render.displayCols newKeys c.di.colNames
-  match newDispCols.findDispIdx? (· == curName) with
-  | some newCur =>
-    let nav' := { c.v.nav with keyCols := newKeys, colCur := newCur }
-    pure (c.s.setCur { c.v with nav := nav', selCols := [] })
-  | none => pure c.s
+def excl (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleKeyCols c.v c.di))
 
--- | Space - toggle column selection (or row selection in meta view)
-def space (c : KeyCtx) : KeyResult := do
-  match c.v.vkind with
-  | .colMeta =>
-    let row := c.v.nav.rowCur
-    let newSel := if c.v.selRows.contains row then c.v.selRows.filter (· != row)
-                  else c.v.selRows ++ [row]
-    pure (c.s.setCur { c.v with selRows := newSel })
-  | _ =>
-    let col := c.v.nav.colCur
-    let newSel := if c.v.selCols.contains col then c.v.selCols.filter (· != col)
-                  else c.v.selCols ++ [col]
-    pure (c.s.setCur { c.v with selCols := newSel })
+-- | Space - toggle column/row selection
+def space (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleSel c.v))
 
 -- | Parse agg function name to Prql.Agg
 def parseAgg : String → Option Prql.Agg
@@ -474,10 +493,10 @@ def caret (c : KeyCtx) : KeyResult := do
   else pure c.s
 
 -- | . - increase decimals
-def dot (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with decimals := c.v.decimals + 1, cache := none })
+def dot (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v true))
 
 -- | , - decrease decimals
-def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with decimals := if c.v.decimals > 0 then c.v.decimals - 1 else 0, cache := none })
+def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v false))
 
 -- | L - load file
 def L (c : KeyCtx) : KeyResult := do
@@ -493,15 +512,10 @@ def r (c : KeyCtx) : KeyResult := do
   pure (c.s.push rv)
 
 -- | q - quit/pop
-def q (c : KeyCtx) : KeyResult := do
-  if c.s.views.length > 1 then pure c.s.pop
-  else pure { c.s with quit := true }
+def q (c : KeyCtx) : KeyResult := pure (quitOrPop c.s)
 
--- | Esc - clear selections (cols or rows)
-def esc (c : KeyCtx) : KeyResult := do
-  if !c.v.selCols.isEmpty then pure (c.s.setCur { c.v with selCols := [] })
-  else if !c.v.selRows.isEmpty then pure (c.s.setCur { c.v with selRows := [] })
-  else pure c.s
+-- | Esc - clear selections
+def esc (c : KeyCtx) : KeyResult := pure (match clearSel c.v with | some v => c.s.setCur v | none => c.s)
 
 end Key
 
