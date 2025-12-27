@@ -94,4 +94,56 @@ def Query.agg (q : Query) (keys : Array String) (funcs : Array Agg) (cols : Arra
   let aggs := funcs.flatMap fun f => cols.map fun c => (f, s!"{f.short}_{c}", c)
   q.pipe (.group keys aggs)
 
+-- | Format cell value as PRQL literal
+def cellToPrql : Cell → String
+  | .null => "null"
+  | .int n => s!"{n}"
+  | .float f => s!"{f}"
+  | .str s => s!"'{s}'"
+  | .bool b => if b then "true" else "false"
+
+-- | Build PRQL filter from column names and cell values
+-- Example: cols=#["a","b"], vals=#[.int 1, .str "x"] → "a == 1 && b == 'x'"
+def buildFilter (cols : Array String) (vals : Array Cell) : String :=
+  cols.mapIdx (fun i cn => s!"{quote cn} == {cellToPrql (vals.getD i .null)}")
+    |>.toList |> String.intercalate " && "
+
+-- | Parse agg function name to Agg
+def Agg.parse : String → Option Agg
+  | "count" => some .count | "sum" => some .sum | "average" => some .avg
+  | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
+
+-- | PRQL function definitions (prepended to all queries)
+-- Matches rust tv's cfg/funcs.prql (use std.count to avoid ambiguity with column named 'count')
+def funcs : String := "
+let freq  = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = std.count this}) | derive {Pct = Cnt * 100 / std.sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
+let cnt   = func tbl   <relation> -> (from tbl | aggregate {n = std.count this})
+let uniq  = func c tbl <relation> -> (from tbl | group {c} (take 1) | select {c})
+let stats = func c tbl <relation> -> (from tbl | aggregate {n = std.count this, min = std.min c, max = std.max c, avg = std.average c, std = std.stddev c})
+let meta  = func c tbl <relation> -> (from tbl | aggregate {cnt = s\"COUNT({c})\", dist = std.count_distinct c, total = std.count this, min = std.min c, max = std.max c})
+"
+
+-- | Theorems: freq PRQL includes required columns
+theorem funcs_has_pct : (funcs.splitOn "Pct").length > 1 := by native_decide
+theorem funcs_has_bar : (funcs.splitOn "Bar").length > 1 := by native_decide
+
+-- | Compile PRQL to SQL using prqlc CLI (stdin → stdout)
+def compile (prql : String) : IO (Except String String) := do
+  let full := funcs ++ "\n" ++ prql
+  let child ← IO.Process.spawn {
+    cmd := "prqlc"
+    args := #["compile", "--hide-signature-comment"]
+    stdin := .piped
+    stdout := .piped
+    stderr := .piped
+  }
+  child.stdin.putStr full
+  child.stdin.flush
+  let (_, child') ← child.takeStdin
+  let stdout ← child'.stdout.readToEnd
+  let stderr ← child'.stderr.readToEnd
+  let code ← child'.wait
+  if code == 0 then return .ok stdout
+  else return .error s!"prqlc: {stderr}"
+
 end Prql

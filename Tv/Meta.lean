@@ -79,7 +79,7 @@ def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := 
     if colNames.isEmpty then return .ok (← SomeTable.empty)
     -- Get types from Arrow format
     if Backend.isSource path then Backend.createSource path
-    match ← Backend.compilePrql schemaPrql with
+    match ← Prql.compile schemaPrql with
     | .error e => return .error e
     | .ok sql =>
       let sql := Backend.replaceDf sql (Backend.fileExpr path)
@@ -96,7 +96,7 @@ def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := 
           unions := unions.push (colStatsSql (colNames.getD i "") (types.getD i "?"))
         -- Compile base PRQL to get FROM clause
         let basePrql := prql ++ " | take 1"
-        match ← Backend.compilePrql basePrql with
+        match ← Prql.compile basePrql with
         | .error e => return .error e
         | .ok baseSql =>
           let baseSql := Backend.replaceDf baseSql (Backend.fileExpr path)

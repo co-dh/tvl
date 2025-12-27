@@ -129,12 +129,4 @@ def View.invalidate (v : View) : View := { v with cache := none }
 def View.copy (v : View) (query : Prql.Query := v.query) : View :=
   { v with query := query, cache := none, total := none }
 
--- | Format cell value for PRQL filter
-def cellToPrql : Cell → String
-  | .null => "null"
-  | .int n => s!"{n}"
-  | .float f => s!"{f}"
-  | .str s => s!"'{s}'"
-  | .bool b => if b then "true" else "false"
-
 end App

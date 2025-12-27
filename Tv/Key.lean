@@ -160,20 +160,6 @@ def adjOff (c : KeyCtx) (nav : PureState) : PureState :=
 @[simp] theorem adjOff_keyCols (c : KeyCtx) (nav : PureState) : (adjOff c nav).keyCols = nav.keyCols := rfl
 
 
--- | Build PRQL filter from column names and cell values
--- Purpose: When Enter on freq row, filter parent to matching rows
--- Inputs: cols=#["a","b"], vals=#[.int 1, .str "x"]
--- Steps: mapIdx pairs col name with val, cellToPrql formats value
--- Expected: "a == 1 && b == 'x'"
-def buildCellFilter (cols : Array String) (vals : Array Cell) : String :=
-  cols.mapIdx (fun i cn => s!"{Prql.quote cn} == {cellToPrql (vals.getD i .null)}")
-    |>.toList |> String.intercalate " && "
-
--- | Parse agg function name to Prql.Agg
-def parseAgg : String → Option Prql.Agg
-  | "count" => some .count | "sum" => some .sum | "average" => some .avg
-  | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
-
 -- | Run pure key: single match on (vkind, key)
 def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   -- Try view-specific handler first
@@ -226,7 +212,7 @@ where
     | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
     | _, .colon => { s with inputMode := .command, inputBuf := "" }
     | _, .pushAgg keys funcs cols =>
-        let aggs := funcs.filterMap parseAgg
+        let aggs := funcs.filterMap Prql.Agg.parse
         if aggs.isEmpty then s
         else s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys aggs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
     -- ret: view-specific
@@ -242,7 +228,7 @@ where
       let cols := colNames.splitOn "," |>.map String.trim |>.toArray
       let pq := s.parents.getD 0 c.v |>.query
       c.row.map (fun vals =>
-        let expr := buildCellFilter cols vals
+        let expr := Prql.buildFilter cols vals
         s.push ⟨c.v.path, pq.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
       ) |>.getD s
     | _, .ret => s

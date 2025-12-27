@@ -8,39 +8,6 @@ import Tv.Prql
 
 namespace Backend
 
--- | PRQL function definitions (prepended to all queries)
--- | Matches rust tv's cfg/funcs.prql (use std.count to avoid ambiguity with column named 'count')
-def prqlFuncs : String := "
-let freq  = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = std.count this}) | derive {Pct = Cnt * 100 / std.sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
-let cnt   = func tbl   <relation> -> (from tbl | aggregate {n = std.count this})
-let uniq  = func c tbl <relation> -> (from tbl | group {c} (take 1) | select {c})
-let stats = func c tbl <relation> -> (from tbl | aggregate {n = std.count this, min = std.min c, max = std.max c, avg = std.average c, std = std.stddev c})
-let meta  = func c tbl <relation> -> (from tbl | aggregate {cnt = s\"COUNT({c})\", dist = std.count_distinct c, total = std.count this, min = std.min c, max = std.max c})
-"
-
--- | Theorems: freq PRQL includes required columns
-theorem freq_has_pct : (prqlFuncs.splitOn "Pct").length > 1 := by native_decide
-theorem freq_has_bar : (prqlFuncs.splitOn "Bar").length > 1 := by native_decide
-
--- | Compile PRQL to SQL using prqlc CLI (stdin → stdout)
-def compilePrql (prql : String) : IO (Except String String) := do
-  let full := prqlFuncs ++ "\n" ++ prql
-  let child ← IO.Process.spawn {
-    cmd := "prqlc"
-    args := #["compile", "--hide-signature-comment"]
-    stdin := .piped
-    stdout := .piped
-    stderr := .piped
-  }
-  child.stdin.putStr full
-  child.stdin.flush
-  let (_, child') ← child.takeStdin
-  let stdout ← child'.stdout.readToEnd
-  let stderr ← child'.stderr.readToEnd
-  let code ← child'.wait
-  if code == 0 then return .ok stdout
-  else return .error s!"prqlc: {stderr}"
-
 -- | Generate table expression for file path or source
 def fileExpr (path : String) : String :=
   if path.endsWith ".parquet" then s!"read_parquet('{path}')"
@@ -138,7 +105,7 @@ structure LimitedQuery where
 def query (q : LimitedQuery) (path : String) : IO (Except String SomeTable) := do
   logPrql q.prql
   if isSource path then createSource path
-  match ← compilePrql q.prql with
+  match ← Prql.compile q.prql with
   | .error e => return .error e
   | .ok sql =>
     let sql := replaceDf sql (fileExpr path)
@@ -186,7 +153,7 @@ def queryDistinct (prql : String) (path : String) (col : String) : IO (Except St
   let distinctPrql := prql ++ " | select {" ++ col ++ "} | group {" ++ col ++ "} (take 1)"
   logPrql distinctPrql
   if isSource path then createSource path
-  match ← compilePrql distinctPrql with
+  match ← Prql.compile distinctPrql with
   | .error e => return .error e
   | .ok sql =>
     let sql := replaceDf sql (fileExpr path)
