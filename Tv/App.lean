@@ -70,42 +70,42 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   | some s' => return s'
   | none =>
   -- build context for key handlers
-  let c : KeyCtx := ⟨s, v, di, max 1 (screenH - 2), screenW⟩
+  let c : KeyCtx := ⟨v, di, max 1 (screenH - 2), screenW⟩
   -- dispatch to key handlers
-  if ev.key == Term.keyArrowDown || ev.ch == chJ then Key.j c
-  else if ev.key == Term.keyArrowUp || ev.ch == chK then Key.k c
-  else if ev.key == Term.keyArrowRight || ev.ch == chL then Key.l c
-  else if ev.key == Term.keyArrowLeft || ev.ch == chH then Key.h c
-  else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then Key.ctrlD c
-  else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then Key.ctrlU c
-  else if ev.key == Term.keyHome || ev.ch == chG then Key.g c
-  else if ev.key == Term.keyEnd || ev.ch == chGG then Key.G c
-  else if ev.ch == ch0 then Key.zero c
-  else if ev.ch == ch1 then Key.one c
-  else if ev.ch == chDollar then Key.dollar c
-  else if ev.ch == chLBrack then Key.lbrak c
-  else if ev.ch == chRBrack then Key.rbrak c
-  else if ev.ch == chD then Key.D c
-  else if ev.ch == chAt then Key.atSign c
-  else if ev.ch == chBackslash then Key.backslash c
-  else if ev.ch == chS then Key.s c
-  else if ev.ch == chM then Key.M c
-  else if ev.ch == chI then Key.I c
-  else if ev.ch == chF then Key.F c
-  else if ev.key == Term.keyEnter || ev.ch == 13 then Key.ret c
-  else if ev.ch == chT then Key.T c
-  else if ev.ch == chSS then Key.S c
-  else if ev.ch == chExcl then Key.excl c
-  else if ev.ch == chSpace then Key.space c
-  else if ev.ch == chB then Key.b c
-  else if ev.ch == chColon then Key.colon c
-  else if ev.ch == chCaret then Key.caret c
-  else if ev.ch == chDot then Key.dot c
-  else if ev.ch == chComma then Key.comma c
-  else if ev.ch == chLL then Key.L c
-  else if ev.ch == chR then Key.r c
-  else if ev.ch == chQ then Key.q c
-  else if ev.key == Term.keyEsc then Key.esc c
+  if ev.key == Term.keyArrowDown || ev.ch == chJ then pure (runKey c .j s)
+  else if ev.key == Term.keyArrowUp || ev.ch == chK then pure (runKey c .k s)
+  else if ev.key == Term.keyArrowRight || ev.ch == chL then pure (runKey c .l s)
+  else if ev.key == Term.keyArrowLeft || ev.ch == chH then pure (runKey c .h s)
+  else if ev.key == Term.keyPageDown || ev.ch == chCtrlD then pure (runKey c .ctrlD s)
+  else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then pure (runKey c .ctrlU s)
+  else if ev.key == Term.keyHome || ev.ch == chG then pure (runKey c .g s)
+  else if ev.key == Term.keyEnd || ev.ch == chGG then pure (runKey c .G s)
+  else if ev.ch == ch0 then pure (runKey c .zero s)
+  else if ev.ch == ch1 then pure (runKey c .one s)
+  else if ev.ch == chDollar then pure (runKey c .dollar s)
+  else if ev.ch == chLBrack then pure (runKey c .sortAsc s)
+  else if ev.ch == chRBrack then pure (runKey c .sortDesc s)
+  else if ev.ch == chD then pure (runKey c .del s)
+  else if ev.ch == chAt then Key.atSign c s
+  else if ev.ch == chBackslash then Key.backslash c s
+  else if ev.ch == chS then Key.sel c s
+  else if ev.ch == chM then Key.M c s
+  else if ev.ch == chI then pure (runKey c .toggleInfo s)
+  else if ev.ch == chF then pure (runKey c .freq s)
+  else if ev.key == Term.keyEnter || ev.ch == 13 then Key.ret c s
+  else if ev.ch == chT then pure (runKey c .dup s)
+  else if ev.ch == chSS then pure (runKey c .swap s)
+  else if ev.ch == chExcl then pure (runKey c .toggleKey s)
+  else if ev.ch == chSpace then pure (runKey c .toggleSel s)
+  else if ev.ch == chB then Key.b c s
+  else if ev.ch == chColon then Key.colon c s
+  else if ev.ch == chCaret then Key.caret c s
+  else if ev.ch == chDot then pure (runKey c (.incDec true) s)
+  else if ev.ch == chComma then pure (runKey c (.incDec false) s)
+  else if ev.ch == chLL then Key.L c s
+  else if ev.ch == chR then pure (runKey c .lr s)
+  else if ev.ch == chQ then pure (runKey c .quit s)
+  else if ev.key == Term.keyEsc then pure (runKey c .clearSel s)
   else if ev.ch == chCtrlC then pure { s with quit := true }
   else pure s
 

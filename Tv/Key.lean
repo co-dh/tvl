@@ -45,13 +45,8 @@ def chCaret : UInt32 := 94   -- '^' rename column
 def chDot : UInt32 := 46     -- '.' increase decimals
 def chComma : UInt32 := 44   -- ',' decrease decimals
 
--- | Meta view column indices (from Backend.queryMeta schema)
-def metaColDist : Nat := 3   -- distinct count column
-def metaColNull : Nat := 4   -- null% column
-
--- | Key handler context (common params for all handlers)
+-- | Key handler context (view info for handlers, State passed separately)
 structure KeyCtx where
-  s  : State         -- app state
   v  : View          -- current view
   di : DisplayInfo   -- display info (colNames, colWidths, nRows, nCols)
   pg : Nat           -- page size (visible rows)
@@ -65,11 +60,23 @@ abbrev KeyResult := IO State
 -- | All pure key operations
 inductive PureKey where
   -- navigation
-  | j | k | l | h | g | G | zero | dollar | ctrlD | ctrlU
-  | retMeta (sel : List String)
+  | j | k | l | h | g | G | zero | one | dollar | ctrlD | ctrlU
+  | retMeta (sel : List String) | colJump (idx : DispIdx)
   -- view transforms
   | sortAsc | sortDesc | del | toggleInfo | dup | swap
   | toggleKey | toggleSel | incDec (inc : Bool) | quit | clearSel
+  -- views (push new view)
+  | freq | lr | pushFilter (expr : String) | selectCols (cols : List String)
+  | pushMeta (metaTbl : SomeTable) | pushFreqFilter (expr : String) (parentQuery : Prql.Query)
+  | pushFld (path : String) (name : String) | pushSource (cmd : String) | pushFile (path : String)
+  -- input modes
+  | inputRename | inputCmd
+  -- agg
+  | pushAgg (keys : List String) (funcs : List Prql.Agg) (cols : List String)
+  -- meta view: pop to parent with keyCols
+  | popMeta
+  -- enter key (pure cases only)
+  | ret
 
 -- | Count visible columns from display position offset
 def visColCount (dispCols : Array String) (colNames : Array String) (widths : Array Nat) (screenW offset : Nat) : Nat :=
@@ -163,252 +170,37 @@ def adjDecimals (v : View) (inc : Bool) : View :=
 def quitOrPop (s : State) : State :=
   if s.views.length > 1 then s.pop else { s with quit := true }
 
--- | Run pure key and adjust offset if needed
-def runKey (c : KeyCtx) (key : PureKey) : State :=
-  let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
-  let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
-  let s := c.v.nav
-  -- navigation keys modify PureState
-  let nav' := match key with
-    | .j => { s with rowCur := min (s.rowCur + 1) lastRow }
-    | .k => { s with rowCur := s.rowCur - 1 }
-    | .l => { s with colCur := ⟨min (s.colCur.val + 1) lastCol⟩ }
-    | .h => { s with colCur := ⟨if s.colCur.val > 0 then s.colCur.val - 1 else 0⟩ }
-    | .g => { s with rowCur := 0 }
-    | .G => { s with rowCur := lastRow }
-    | .zero => { s with colCur := ⟨0⟩, colOff := ⟨0⟩ }
-    | .dollar => { s with colCur := ⟨lastCol⟩ }
-    | .ctrlD => { s with rowCur := min (s.rowCur + c.pg) lastRow }
-    | .ctrlU => { s with rowCur := s.rowCur - min s.rowCur c.pg }
-    | .retMeta sel => { s with keyCols := sel, colCur := ⟨0⟩, colOff := ⟨0⟩ }
-    | _ => s  -- non-nav keys don't modify nav
-  -- adjust offset for nav keys
-  let dispCols := Render.displayCols nav'.keyCols c.di.colNames
-  let newOff := adjustColOff nav'.colOff.val nav'.colCur.val dispCols c.di.colNames c.di.colWidths c.sw
-  let v' := { c.v with nav := { nav' with colOff := ⟨newOff⟩ } }
-  -- view/state transforms
-  match key with
-  | .sortAsc => c.s.setCur (sortBy v' (curColName c) true)
-  | .sortDesc => c.s.setCur (sortBy v' (curColName c) false)
-  | .del => match delCols v' c.di with | some v => c.s.setCur v | none => c.s
-  | .toggleInfo => { c.s with showInfo := !c.s.showInfo }
-  | .dup => c.s.dupView
-  | .swap => c.s.swapViews
-  | .toggleKey => c.s.setCur (toggleKeyCols v' c.di)
-  | .toggleSel => c.s.setCur (toggleSel v')
-  | .incDec inc => c.s.setCur (adjDecimals v' inc)
-  | .quit => quitOrPop c.s
-  | .clearSel => match clearSel v' with | some v => c.s.setCur v | none => c.s
-  | _ => c.s.setCur v'  -- nav keys just update view
-
-namespace Key
-
--- | Pure key handlers (all use runKey)
-def j (c : KeyCtx) : KeyResult := pure (runKey c .j)
-def k (c : KeyCtx) : KeyResult := pure (runKey c .k)
-def l (c : KeyCtx) : KeyResult := pure (runKey c .l)
-def h (c : KeyCtx) : KeyResult := pure (runKey c .h)
-def ctrlD (c : KeyCtx) : KeyResult := pure (runKey c .ctrlD)
-def ctrlU (c : KeyCtx) : KeyResult := pure (runKey c .ctrlU)
-def g (c : KeyCtx) : KeyResult := pure (runKey c .g)
-def G (c : KeyCtx) : KeyResult := pure (runKey c .G)
-def lbrak (c : KeyCtx) : KeyResult := pure (runKey c .sortAsc)
-def rbrak (c : KeyCtx) : KeyResult := pure (runKey c .sortDesc)
-def D (c : KeyCtx) : KeyResult := pure (runKey c .del)
-def I (c : KeyCtx) : KeyResult := pure (runKey c .toggleInfo)
-def T (c : KeyCtx) : KeyResult := pure (runKey c .dup)
-def S (c : KeyCtx) : KeyResult := pure (runKey c .swap)
-def excl (c : KeyCtx) : KeyResult := pure (runKey c .toggleKey)
-def space (c : KeyCtx) : KeyResult := pure (runKey c .toggleSel)
-def dot (c : KeyCtx) : KeyResult := pure (runKey c (.incDec true))
-def comma (c : KeyCtx) : KeyResult := pure (runKey c (.incDec false))
-def q (c : KeyCtx) : KeyResult := pure (runKey c .quit)
-def esc (c : KeyCtx) : KeyResult := pure (runKey c .clearSel)
+-- | Meta view column indices (from Backend.queryMeta schema)
+def metaColDist' : Nat := 3   -- distinct count column
+def metaColNull' : Nat := 4   -- null% column
 
 -- | Check if null% is 100% (fully null column)
-def isFullNull (s : String) : Bool := s == "100%"
-
--- | Theorem: "100%" matches isFullNull
-theorem isFullNull_100 : isFullNull "100%" = true := rfl
-
--- | Theorem: "0%" does not match isFullNull
-theorem isFullNull_0 : isFullNull "0%" = false := rfl
-
--- | Theorem: "50%" does not match isFullNull
-theorem isFullNull_50 : isFullNull "50%" = false := rfl
+def isFullNull (str : String) : Bool := str == "100%"
 
 -- | Pure: select rows where null% column is "100%"
 def selectFullNull (st : SomeTable) : List Nat :=
   (List.range st.nRows).filter fun r =>
-    match st.table.getIdx r metaColNull with
-    | .str s => isFullNull s
+    match st.table.getIdx r metaColNull' with
+    | .str str => isFullNull str
     | _ => false
 
--- | Theorem: selectFullNull filters exactly rows with isFullNull (by def)
-theorem selectFullNull_def (st : SomeTable) :
-    selectFullNull st = (List.range st.nRows).filter fun r =>
-      match st.table.getIdx r metaColNull with | .str s => isFullNull s | _ => false := rfl
+-- | Pure: select rows where dist == 1 (single-value cols)
+def selectSingleVal (st : SomeTable) : List Nat :=
+  (List.range st.nRows).filter fun r =>
+    match st.table.getIdx r metaColDist' with
+    | .int n => n == 1
+    | _ => false
 
--- | 0 - first column (meta: select rows with 100% null)
-def zero (c : KeyCtx) : KeyResult := do
-  match c.v.vkind with
-  | .colMeta =>
-    match c.v.cache with
-    | some st => pure (c.s.setCur { c.v with selRows := selectFullNull st })
-    | none => pure c.s
-  | _ => pure (runKey c .zero)
+-- | Adjust column offset to keep cursor visible
+def adjOff (c : KeyCtx) (nav : PureState) : PureState :=
+  let dispCols := Render.displayCols nav.keyCols c.di.colNames
+  let off := adjustColOff nav.colOff.val nav.colCur.val dispCols c.di.colNames c.di.colWidths c.sw
+  { nav with colOff := ⟨off⟩ }
 
--- | 1 - meta: select rows with dist == 1 (single-value cols)
-def one (c : KeyCtx) : KeyResult := do
-  match c.v.vkind with
-  | .colMeta =>
-    match c.v.cache with
-    | some st =>
-      let sel := (List.range st.nRows).filter fun r =>
-        match st.table.getIdx r metaColDist with
-        | .int n => n == 1
-        | _ => false
-      pure (c.s.setCur { c.v with selRows := sel })
-    | none => pure c.s
-  | _ => pure c.s  -- no-op for non-meta views
-
--- | $ - last column
-def dollar (c : KeyCtx) : KeyResult := pure (runKey c .dollar)
-
--- | @ - column jump with fzf (finds DispIdx in display order)
-def atSign (c : KeyCtx) : KeyResult := do
-  let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
-  match ← runFzf ["--prompt=Column: "] colNamesStr with
-  | some col =>
-    let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
-    match dispCols.findDispIdx? (· == col) with
-    | some idx => pure (c.s.setCur { c.v with nav := { c.v.nav with colCur := idx } })
-    | none => pure c.s
-  | none => pure c.s
-
--- | \ - filter with fzf
-def backslash (c : KeyCtx) : KeyResult := do
-  let col := curColName c
-  match ← Backend.queryDistinct c.v.query.render c.v.path col with
-  | .ok vals =>
-    let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
-    match ← runFzf ["--print-query", "--prompt=" ++ prompt] (String.intercalate "\n" vals) with
-    | some result =>
-      let lines := result.splitOn "\n" |>.filter (!·.isEmpty)
-      let input := lines.headD ""
-      let fromHints := (lines.tailD []).filter vals.contains
-      let expr := if fromHints.length == 1 then s!"{col} == '{fromHints.head!}'"
-        else if fromHints.length > 1 then
-          "(" ++ String.intercalate " || " (fromHints.map fun v => s!"{col} == '{v}'") ++ ")"
-        else if !input.isEmpty then
-          if input.startsWith ">" || input.startsWith "<" || input.startsWith "=" || input.startsWith "~"
-          then s!"{col} {input}" else input
-        else ""
-      if expr.isEmpty then pure c.s
-      else
-        let fv : View := ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
-        pure (c.s.push fv)
-    | none => pure c.s
-  | .error _ => pure c.s
-
--- | s - select columns
-def s (c : KeyCtx) : KeyResult := do
-  if c.s.testMode then
-    pure { c.s with inputMode := .selectCols, inputBuf := "" }
-  else
-    let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
-    let selected ← runFzfMulti ["--prompt=Select: "] colNamesStr
-    if selected.length > 0 then
-      pure (c.s.setCur (c.v.copy (query := c.v.query.select selected)))
-    else pure c.s
-
--- | M - meta view (works on any view)
-def M (c : KeyCtx) : KeyResult := do
-  match ← Backend.queryMeta c.v.query.render c.v.path with
-  | .ok metaTbl =>
-    let mv : View := ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
-    pure (c.s.push mv)
-  | .error e => pure (c.s.setMsg s!"meta error: {e}")
-
--- | F - frequency view (works on any view)
-def F (c : KeyCtx) : KeyResult := do
-  let cols := if c.v.nav.keyCols.isEmpty then [curColName c] else c.v.nav.keyCols
-  let colStr := String.intercalate "," cols
-  let query := if cols.length == 1 then c.v.query.freq cols.head! else c.v.query.freqFull cols
-  let nav : PureState := { keyCols := cols }
-  let fv : View := ⟨c.v.path, query, s!"freq {colStr}", nav, .freqV colStr, none, [], [], none, 3⟩
-  pure (c.s.push fv)
-
--- | ret on freqV: push filtered view based on selected row
-def retFreq (c : KeyCtx) (colNames : String) : KeyResult := do
-  let cols := colNames.splitOn "," |>.map String.trim
-  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur cols.length with
-  | .error _ => pure c.s
-  | .ok vals =>
-    let filters := (List.range cols.length).zip cols |>.map fun (i, cn) =>
-      s!"{cn} == {cellToPrql (vals.getD i .null)}"
-    let expr := String.intercalate " && " filters
-    let parentQuery := match c.s.views.tail? with | some (pv :: _) => pv.query | _ => {}
-    let fv : View := ⟨c.v.path, parentQuery.filter expr, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
-    pure (c.s.push fv)
-
--- | ret on folder (source:ls): enter folder or open file with bat
-def retFld (c : KeyCtx) : KeyResult := do
-  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur 9 with
-  | .error _ => pure c.s
-  | .ok vals =>
-    let perms := match vals.getD 0 .null with | .str str => str | _ => ""
-    let name := match vals.getD 8 .null with | .str str => str | _ => ""
-    if name.isEmpty then pure c.s
-    else
-      let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
-      let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
-      if perms.startsWith "d" then
-        let lsv : View := ⟨s!"source:ls:{fullPath}", {}, s!"ls {name}", {}, .tbl, none, [], [], none, 3⟩
-        pure (c.s.push lsv)
-      else
-        runBat fullPath
-        pure c.s
-
--- | ret on tbl: no-op (could add row details later)
-def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
-
--- | ret on lr (source:lr): open file with bat
-def retLr (c : KeyCtx) : KeyResult := do
-  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur 7 with
-  | .error _ => pure c.s
-  | .ok vals =>
-    let path := match vals.getD 6 .null with | .str s => s | _ => ""
-    if path.isEmpty then pure c.s
-    else
-      runBat path
-      pure c.s
-
--- | Theorem: j increments rowCur (clamped to lastRow)
-theorem runKey_j_rowCur (c : KeyCtx) :
-    let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
-    let s' := runKey c .j
-    s'.curView.nav.rowCur = min (c.v.nav.rowCur + 1) lastRow := by
-  simp only [runKey, State.setCur]
-
--- | Theorem: k decrements rowCur (saturating at 0)
-theorem runKey_k_rowCur (c : KeyCtx) :
-    let s' := runKey c .k
-    s'.curView.nav.rowCur = c.v.nav.rowCur - 1 := by
-  simp only [runKey, State.setCur]
-
--- | Theorem: l increments colCur (clamped to lastCol)
-theorem runKey_l_colCur (c : KeyCtx) :
-    let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
-    let s' := runKey c .l
-    s'.curView.nav.colCur.val = min (c.v.nav.colCur.val + 1) lastCol := by
-  simp only [runKey, State.setCur]
-
--- | Theorem: retMeta sets keyCols = sel, cursor = 0
-theorem runKey_retMeta_cursor (c : KeyCtx) (sel : List String) :
-    let s' := runKey c (.retMeta sel)
-    s'.curView.nav.colCur.val = 0 ∧ s'.curView.nav.keyCols = sel := by
-  simp only [runKey, State.setCur]; trivial
+-- | adjOff only changes colOff, preserves everything else
+@[simp] theorem adjOff_rowCur (c : KeyCtx) (nav : PureState) : (adjOff c nav).rowCur = nav.rowCur := rfl
+@[simp] theorem adjOff_colCur (c : KeyCtx) (nav : PureState) : (adjOff c nav).colCur = nav.colCur := rfl
+@[simp] theorem adjOff_keyCols (c : KeyCtx) (nav : PureState) : (adjOff c nav).keyCols = nav.keyCols := rfl
 
 -- | Pure: pop meta view and set parent's keyCols
 def popMetaState (s : State) (selColNames : List String) : State :=
@@ -419,12 +211,6 @@ def popMetaState (s : State) (selColNames : List String) : State :=
     { s with curView := parent', parents := rest }
   | [] => s  -- no parent, stay on current
 
--- | Theorem: popMetaState returns to parent with keyCols = selColNames
-theorem popMetaState_keyCols (cur parent : View) (rest : List View) (sel : List String) :
-    let s : State := { curView := cur, parents := parent :: rest }
-    let s' := popMetaState s sel
-    s'.curView.nav.keyCols = sel := by simp [popMetaState]
-
 -- | Get column names from selected rows in meta table (col 0 is "name")
 def metaSelNames (st : SomeTable) (selRows : List Nat) : List String :=
   selRows.filterMap fun r =>
@@ -432,82 +218,236 @@ def metaSelNames (st : SomeTable) (selRows : List Nat) : List String :=
     | .str s => some s
     | _ => none
 
--- | ret on colMeta: pop to parent with selected column names as keyCols
-def retMeta (c : KeyCtx) : KeyResult := do
-  if c.v.selRows.isEmpty then pure c.s
-  else
-    match c.v.cache with
-    | some st =>
-      let selNames := metaSelNames st c.v.selRows
-      pure (popMetaState c.s selNames)
-    | none => pure c.s
+-- | Run pure key: single match on (vkind, key)
+def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
+  let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
+  let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
+  let n := c.v.nav
+  match c.v.vkind, key with
+  -- colMeta special: 0 selects 100% null, 1 selects single-value
+  | .colMeta, .zero => c.v.cache.map (fun st => s.setCur { c.v with selRows := selectFullNull st }) |>.getD s
+  | .colMeta, .one => c.v.cache.map (fun st => s.setCur { c.v with selRows := selectSingleVal st }) |>.getD s
+  -- navigation: j/k/l/h/g/G/0/$/ctrlD/ctrlU/retMeta/colJump
+  | _, .j => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + 1) lastRow } }
+  | _, .k => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - 1 } }
+  | _, .l => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨min (n.colCur.val + 1) lastCol⟩ } }
+  | _, .h => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨if n.colCur.val > 0 then n.colCur.val - 1 else 0⟩ } }
+  | _, .g => s.setCur { c.v with nav := adjOff c { n with rowCur := 0 } }
+  | _, .G => s.setCur { c.v with nav := adjOff c { n with rowCur := lastRow } }
+  | _, .zero => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨0⟩, colOff := ⟨0⟩ } }
+  | _, .one => s  -- non-colMeta: no-op
+  | _, .dollar => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨lastCol⟩ } }
+  | _, .ctrlD => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + c.pg) lastRow } }
+  | _, .ctrlU => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - min n.rowCur c.pg } }
+  | _, .retMeta sel => s.setCur { c.v with nav := adjOff c { n with keyCols := sel, colCur := ⟨0⟩, colOff := ⟨0⟩ } }
+  | _, .colJump idx => s.setCur { c.v with nav := adjOff c { n with colCur := idx } }
+  -- view transforms
+  | _, .sortAsc => s.setCur (sortBy c.v (curColName c) true)
+  | _, .sortDesc => s.setCur (sortBy c.v (curColName c) false)
+  | _, .del => delCols c.v c.di |>.map s.setCur |>.getD s
+  | _, .toggleInfo => { s with showInfo := !s.showInfo }
+  | _, .dup => s.dupView
+  | _, .swap => s.swapViews
+  | _, .toggleKey => s.setCur (toggleKeyCols c.v c.di)
+  | _, .toggleSel => s.setCur (toggleSel c.v)
+  | _, .incDec inc => s.setCur (adjDecimals c.v inc)
+  | _, .quit => quitOrPop s
+  | _, .clearSel => clearSel c.v |>.map s.setCur |>.getD s
+  -- push views
+  | _, .freq => let cols := n.keyCols ++ [curColName c]
+                let colStr := String.intercalate "," cols
+                s.push ⟨c.v.path, c.v.query.freqFull cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, [], [], none, 3⟩
+  | _, .lr => s.push ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, [], [], none, 3⟩
+  | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
+  | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
+  | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
+  | _, .pushFreqFilter expr pq => s.push ⟨c.v.path, pq.filter expr, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
+  | _, .pushFld path name => s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .tbl, none, [], [], none, 3⟩
+  | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, [], [], none, 3⟩
+  | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, [], [], none, 3⟩
+  | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
+  | _, .inputCmd => { s with inputMode := .command, inputBuf := "" }
+  | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := [] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, [], [], none, 3⟩
+  | _, .popMeta => if c.v.selRows.isEmpty then s
+                   else c.v.cache.map (fun st => popMetaState s (metaSelNames st c.v.selRows)) |>.getD s
+  -- ret: pure cases (colMeta -> popMeta, others -> no-op for pure, IO handled separately)
+  | .colMeta, .ret => if c.v.selRows.isEmpty then s
+                      else c.v.cache.map (fun st => popMetaState s (metaSelNames st c.v.selRows)) |>.getD s
+  | .tbl, .ret => s  -- plain table: no-op (special sources handled in IO)
+  | .fld, .ret => s  -- folder: handled in IO (retFld)
+  | .freqV _, .ret => s  -- freqV: handled in IO (retFreq)
 
--- | ret - enter key (dispatch by ViewKind)
-def ret (c : KeyCtx) : KeyResult := do
+namespace Key
+
+-- | Theorems for isFullNull
+theorem isFullNull_100 : isFullNull "100%" = true := rfl
+theorem isFullNull_0 : isFullNull "0%" = false := rfl
+theorem isFullNull_50 : isFullNull "50%" = false := rfl
+
+-- | @ - column jump with fzf
+def atSign (c : KeyCtx) (s : State) : KeyResult :=
+  runFzfIdx ["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames)
+    <&> (·.map (fun idx => runKey c (.colJump idx) s) |>.getD s)
+
+-- | Build filter expression from fzf result
+def buildFilterExpr (col : String) (vals : List String) (result : String) : String :=
+  let lines := result.splitOn "\n" |>.filter (!·.isEmpty)
+  let input := lines.headD ""
+  let fromHints := (lines.tailD []).filter vals.contains
+  if fromHints.length == 1 then s!"{col} == '{fromHints.head!}'"
+  else if fromHints.length > 1 then "(" ++ String.intercalate " || " (fromHints.map fun v => s!"{col} == '{v}'") ++ ")"
+  else if !input.isEmpty then
+    if input.startsWith ">" || input.startsWith "<" || input.startsWith "=" || input.startsWith "~"
+    then s!"{col} {input}" else input
+  else ""
+
+-- | \ - filter with fzf
+def backslash (c : KeyCtx) (s : State) : KeyResult := do
+  let col := curColName c
+  let vals ← Backend.queryDistinct c.v.query.render c.v.path col |>.map (·.toOption.getD [])
+  let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
+  (← runFzf ["--print-query", "--prompt=" ++ prompt] (String.intercalate "\n" vals))
+    |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
+    |>.map (fun expr => runKey c (.pushFilter expr) s) |>.getD s |> pure
+
+-- | s - select columns
+def sel (c : KeyCtx) (s : State) : KeyResult :=
+  if s.testMode then pure { s with inputMode := .selectCols, inputBuf := "" }
+  else runFzfMulti ["--prompt=Select: "] (c.di.colNames.toList |> String.intercalate "\n")
+         <&> fun cols => runKey c (.selectCols cols) s
+
+-- | M - meta view (works on any view)
+def M (c : KeyCtx) (s : State) : KeyResult :=
+  Backend.queryMeta c.v.query.render c.v.path
+    <&> fun r => r.toOption.map (fun t => runKey c (.pushMeta t) s) |>.getD s
+
+-- | Build filter expression from cell values
+def buildCellFilter (cols : List String) (vals : Array Cell) : String :=
+  (List.range cols.length).zip cols |>.map (fun (i, cn) => s!"{cn} == {cellToPrql (vals.getD i .null)}")
+    |> String.intercalate " && "
+
+-- | ret on freqV: push filtered view based on selected row
+def retFreq (c : KeyCtx) (colNames : String) (s : State) : KeyResult :=
+  let cols := colNames.splitOn "," |>.map String.trim
+  let pq := s.views.tail?.bind (·.head?) |>.map (·.query) |>.getD {}
+  Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur cols.length
+    <&> fun r => r.toOption.map (fun v => runKey c (.pushFreqFilter (buildCellFilter cols v) pq) s) |>.getD s
+
+-- | ret on folder (source:ls): enter folder or open file with bat
+def retFld (c : KeyCtx) (s : State) : KeyResult := do
+  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur 9 with
+  | .error _ => pure s
+  | .ok vals =>
+    let perms := match vals.getD 0 .null with | .str str => str | _ => ""
+    let name := match vals.getD 8 .null with | .str str => str | _ => ""
+    if name.isEmpty then pure s
+    else
+      let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
+      let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
+      if perms.startsWith "d" then pure (runKey c (.pushFld fullPath name) s)
+      else runBat fullPath *> pure s
+
+-- | ret on tbl: no-op (could add row details later)
+def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
+
+-- | Extract string from cell
+def cellStr : Cell → Option String | .str s => some s | _ => none
+
+-- | lr schema: 7 columns, path at index 6
+def lrColCount : Nat := 7
+def lrPathIdx : Nat := 6
+
+-- | ret on lr (source:lr): open file with bat
+-- 1. queryRow - fetches current row (7 columns from lr output)
+-- 2. toOption - converts Except to Option (discards error)
+-- 3. getD lrPathIdx - gets column 6 (file path), cellStr extracts string
+-- 4. filter - discards if path is empty
+-- 5. runBat - if path exists, open file in bat pager
+-- 6. getD (pure s) - if any step failed, return unchanged state
+def retLr (c : KeyCtx) (s : State) : KeyResult :=
+  Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur lrColCount >>= fun r =>
+    r.toOption.bind (·.getD lrPathIdx .null |> cellStr) |>.filter (!·.isEmpty)
+      |>.map (runBat · *> pure s) |>.getD (pure s)
+
+-- | Theorem: j increments rowCur (clamped to lastRow)
+theorem runKey_j_rowCur (c : KeyCtx) (s : State) :
+    let lastRow := if c.di.nRows > 0 then c.di.nRows - 1 else 0
+    (runKey c .j s).curView.nav.rowCur = min (c.v.nav.rowCur + 1) lastRow := by
+  simp [runKey, State.setCur]
+
+-- | Theorem: k decrements rowCur (saturating at 0)
+theorem runKey_k_rowCur (c : KeyCtx) (s : State) :
+    (runKey c .k s).curView.nav.rowCur = c.v.nav.rowCur - 1 := by
+  simp [runKey, State.setCur]
+
+-- | Theorem: l increments colCur (clamped to lastCol)
+theorem runKey_l_colCur (c : KeyCtx) (s : State) :
+    let lastCol := if c.di.nCols > 0 then c.di.nCols - 1 else 0
+    (runKey c .l s).curView.nav.colCur.val = min (c.v.nav.colCur.val + 1) lastCol := by
+  simp [runKey, State.setCur]
+
+-- | Theorem: retMeta sets keyCols = sel, cursor = 0
+theorem runKey_retMeta_cursor (c : KeyCtx) (sel : List String) (s : State) :
+    (runKey c (.retMeta sel) s).curView.nav.colCur.val = 0 ∧
+    (runKey c (.retMeta sel) s).curView.nav.keyCols = sel := by
+  simp [runKey, State.setCur]
+
+
+-- | ret - enter key (dispatch by ViewKind, IO cases)
+def ret (c : KeyCtx) (s : State) : KeyResult :=
   match c.v.vkind with
-  | .freqV colNames => retFreq c colNames
+  | .freqV colNames => retFreq c colNames s
   | .tbl =>
-    if c.v.path.startsWith "source:ls" then retFld c
-    else if c.v.path.startsWith "source:lr" then retLr c
-    else retTbl c c.s
-  | .colMeta => retMeta c
-  | .fld => retFld c
+    if c.v.path.startsWith "source:ls" then retFld c s
+    else if c.v.path.startsWith "source:lr" then retLr c s
+    else pure (runKey c .ret s)
+  | .colMeta => pure (runKey c .ret s)
+  | .fld => retFld c s
 
 -- | Parse agg function name to Prql.Agg
 def parseAgg : String → Option Prql.Agg
   | "count" => some .count | "sum" => some .sum | "average" => some .avg
   | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
 
+-- | Get agg functions: testMode -> [sum], else fzf multi-select
+def getAggFuncs (s : State) (keyNames aggNames : List String) : IO (List Prql.Agg) :=
+  if s.testMode then pure [Prql.Agg.sum]
+  else do
+    let keysStr := String.intercalate "," keyNames
+    let colsStr := String.intercalate "," aggNames
+    let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
+    let names ← runFzfMulti ["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev"
+    pure (names.filterMap parseAgg)
+
 -- | b - aggregate by key columns
-def b (c : KeyCtx) : KeyResult := do
-  if c.v.nav.keyCols.isEmpty then pure { c.s with msg := "Set key columns first with !" }
+def b (c : KeyCtx) (s : State) : KeyResult := do
+  if c.v.nav.keyCols.isEmpty then pure { s with msg := "Set key columns first with !" }
   else
     let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
     let keyNames := c.v.nav.keyCols
     let aggPos := if c.v.selCols.isEmpty then [c.v.nav.colCur] else c.v.selCols
     let aggNames := aggPos.map fun p => dispCols.getDisp p "?"
-    if aggNames.isEmpty then pure { c.s with msg := "No columns to aggregate" }
+    if aggNames.isEmpty then pure { s with msg := "No columns to aggregate" }
     else
-      let funcs ← if c.s.testMode then pure [Prql.Agg.sum]
-        else do
-          let keysStr := String.intercalate "," keyNames
-          let colsStr := String.intercalate "," aggNames
-          let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
-          let names ← runFzfMulti ["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev"
-          pure (names.filterMap parseAgg)
-      if funcs.isEmpty then pure c.s
-      else
-        let av : View := ⟨c.v.path, c.v.query.agg keyNames funcs aggNames, "agg", {}, .tbl, none, [], [], none, 3⟩
-        let s' := c.s.setCur { c.v with selCols := [] }
-        pure (s'.push av)
+      let funcs ← getAggFuncs s keyNames aggNames
+      pure (if funcs.isEmpty then s else runKey c (.pushAgg keyNames funcs aggNames) s)
+
+-- | Get source command: testMode -> inputCmd, else fzf -> pushSource
+def getSource (s : State) : IO (Option PureKey) :=
+  if s.testMode then pure (some .inputCmd)
+  else runFzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" <&> (·.map .pushSource)
 
 -- | : - command mode
-def colon (c : KeyCtx) : KeyResult := do
-  if c.s.testMode then pure { c.s with inputMode := .command, inputBuf := "" }
-  else
-    match ← runFzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" with
-    | some cmd =>
-      let sv : View := ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, [], [], none, 3⟩
-      pure (c.s.push sv)
-    | none => pure c.s
+def colon (c : KeyCtx) (s : State) : KeyResult :=
+  getSource s <&> (·.map (runKey c · s) |>.getD s)
 
--- | ^ - rename column
-def caret (c : KeyCtx) : KeyResult := do
-  if c.s.testMode then pure { c.s with inputMode := .renameTo, inputBuf := "" }
-  else pure c.s
+-- | ^ - rename column (pure: inputRename in runKey, testMode only for now)
+def caret (c : KeyCtx) (s : State) : KeyResult :=
+  pure (if s.testMode then runKey c .inputRename s else s)
 
--- | L - load file
-def L (c : KeyCtx) : KeyResult := do
-  match ← runFzf ["--prompt=Load: "] "" with
-  | some path =>
-    let lv : View := ⟨path, {}, "", {}, .tbl, none, [], [], none, 3⟩
-    pure (c.s.push lv)
-  | none => pure c.s
-
--- | r - recursive file listing
-def r (c : KeyCtx) : KeyResult := do
-  let rv : View := ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, [], [], none, 3⟩
-  pure (c.s.push rv)
+-- | L - load file (IO: fzf, pure: pushFile in runKey)
+def L (c : KeyCtx) (s : State) : KeyResult :=
+  runFzf ["--prompt=Load: "] "" <&> fun r => r.map (fun p => runKey c (.pushFile p) s) |>.getD s
 
 end Key
 
