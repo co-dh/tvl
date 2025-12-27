@@ -80,7 +80,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   else if ev.key == Term.keyPageUp || ev.ch == chCtrlU then pure (runKey c .ctrlU s)
   else if ev.key == Term.keyHome || ev.ch == chG then pure (runKey c .g s)
   else if ev.key == Term.keyEnd || ev.ch == chGG then pure (runKey c .G s)
-  else if ev.ch == ch0 then pure (runKey c .zero s)
+  else if ev.ch == ch0 then pure (runKey c ._0 s)
   else if ev.ch == ch1 then pure (runKey c .one s)
   else if ev.ch == chDollar then pure (runKey c .dollar s)
   else if ev.ch == chLBrack then pure (runKey c .sortAsc s)
