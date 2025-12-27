@@ -195,20 +195,19 @@ def rbrak (c : KeyCtx) : KeyResult := do
   let prql := (Prql.Query.parse c.v.prql).sortDesc (curColName c) |>.render
   pure (c.s.setCur (c.v.copy (prql := prql)))
 
--- | D - delete column(s) using DuckDB EXCLUDE syntax
+-- | D - delete column(s) using PRQL select whitelist
 def D (c : KeyCtx) : KeyResult := do
   let dispCols := Render.displayCols c.v.nav.keyCols c.di.colNames
   let curIdx := c.v.nav.colCur
   let delPos := if c.v.selCols.isEmpty then [curIdx] else c.v.selCols
   let delNames := delPos.map fun p => dispCols.getDisp p "?"
   let allDelCols := c.v.nav.delCols ++ delNames.filter (!c.v.nav.delCols.contains ·)
-  let keepCount := c.di.nCols - delNames.length
-  if keepCount > 0 then
-    let prql := (Prql.Query.new "df").exclude allDelCols |>.render
-    let delStr := String.intercalate "," allDelCols
-    let newDisp := s!"del {delStr}"
+  let keepCols := c.di.colNames.toList.filter (!delNames.contains ·)
+  if keepCols.length > 0 then
+    let prql := (Prql.Query.parse c.v.prql).select keepCols |>.render
+    let newDisp := s!"del {allDelCols.length}"
     let newKeyCols := c.v.nav.keyCols.filter (!delNames.contains ·)
-    let maxCol := keepCount - 1
+    let maxCol := keepCols.length - 1
     let nav' := { c.v.nav with
       colCur := ⟨min curIdx.val maxCol⟩
       colOff := ⟨min c.v.nav.colOff.val maxCol⟩
