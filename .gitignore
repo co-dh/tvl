@@ -7,3 +7,4 @@ lake-packages/
 *.a
 /tv
 tmp/
+*.tv.meta.parquet

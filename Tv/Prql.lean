@@ -18,7 +18,6 @@ inductive Op where
   | derive (bindings : Array (String × String))     -- derive {x = expr}
   | group (keys : Array String) (aggs : Array (Agg × String × String))  -- group {k} (agg {name = fn col})
   | take (n : Nat)                                  -- take n
-  | colMeta (col : String)                          -- aggregate {cnt, dist, total, min, max}
   deriving Inhabited
 
 -- | PRQL query: base table + operations
@@ -64,15 +63,11 @@ def Op.render : Op → String
     let as := aggs.map fun (fn, name, col) => s!"{name} = {fn.name} {quote col}"
     s!"group \{{(keys.map quote).join ", "}} (aggregate \{{as.join ", "}})"
   | .take n => s!"take {n}"
-  | .colMeta col => s!"meta {quote col}"
 
 -- | Render full query to PRQL string
 def Query.render (q : Query) : String :=
   if q.ops.isEmpty then q.base
   else q.base ++ " | " ++ (q.ops.map Op.render).join " | "
-
--- | Parse base query string to Query (extracts existing ops)
-def Query.parse (s : String) : Query := ⟨s, #[]⟩
 
 -- | Pipe: append operation to query
 def Query.pipe (q : Query) (op : Op) : Query := { q with ops := q.ops.push op }
@@ -82,11 +77,7 @@ instance : HAppend Query Op Query where hAppend := Query.pipe
 infixl:65 " |> " => Query.pipe  -- q |> .filter "x > 5"
 
 -- | Builder helpers
-def Query.new (tbl : String := "df") : Query := ⟨s!"from {tbl}", #[]⟩
-
 def Query.filter (q : Query) (expr : String) : Query := q.pipe (.filter expr)
-def Query.sortAsc (q : Query) (col : String) : Query := q.pipe (.sort #[(col, true)])
-def Query.sortDesc (q : Query) (col : String) : Query := q.pipe (.sort #[(col, false)])
 def Query.select (q : Query) (cols : Array String) : Query := q.pipe (.sel cols)
 def Query.derive1 (q : Query) (name expr : String) : Query := q.pipe (.derive #[(name, expr)])
 
@@ -102,8 +93,5 @@ def Query.freq (q : Query) (cols : Array String) : Query :=
 def Query.agg (q : Query) (keys : Array String) (funcs : Array Agg) (cols : Array String) : Query :=
   let aggs := funcs.flatMap fun f => cols.map fun c => (f, s!"{f.short}_{c}", c)
   q.pipe (.group keys aggs)
-
--- | Column metadata query (cnt, distinct, total, min, max)
-def Query.colMeta (q : Query) (col : String) : Query := q.pipe (.colMeta col)
 
 end Prql

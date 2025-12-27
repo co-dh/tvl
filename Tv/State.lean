@@ -99,9 +99,6 @@ def State.swapViews (s : State) : State :=
 def State.dupView (s : State) : State :=
   { s with parents := #[s.curView] ++ s.parents }
 
--- | Set status message
-def State.setMsg (s : State) (m : String) : State := { s with msg := m }
-
 -- | Max rows to fetch (prevent OOM on huge files)
 def maxRows : Nat := 1000
 

@@ -17,8 +17,7 @@ def keyEsc        : UInt16 := 0x1B
 def keyEnter      : UInt16 := 0x0D
 
 -- | Event types
-def eventKey    : UInt8 := 1
-def eventResize : UInt8 := 2
+def eventKey : UInt8 := 1
 
 -- | Colors (termbox2 indexed: TB_DEFAULT=0, TB_BLACK=1, ..., TB_WHITE=8)
 def default : UInt32 := 0x0000
@@ -32,7 +31,6 @@ def cyan    : UInt32 := 0x0007
 def white   : UInt32 := 0x0008
 
 -- | Attributes (OR with color)
-def bold      : UInt32 := 0x01000000
 def underline : UInt32 := 0x02000000
 
 -- | Terminal event from poll
