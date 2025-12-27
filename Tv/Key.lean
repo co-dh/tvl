@@ -260,6 +260,33 @@ def rbrak (c : KeyCtx) : KeyResult := pure (c.s.setCur (sortBy c.v (curColName c
 -- | D - delete column(s)
 def D (c : KeyCtx) : KeyResult := pure (match delCols c.v c.di with | some v => c.s.setCur v | none => c.s)
 
+-- | I - toggle info overlay
+def I (c : KeyCtx) : KeyResult := pure { c.s with showInfo := !c.s.showInfo }
+
+-- | T - duplicate view
+def T (c : KeyCtx) : KeyResult := pure c.s.dupView
+
+-- | S - swap views
+def S (c : KeyCtx) : KeyResult := pure c.s.swapViews
+
+-- | ! - toggle key column
+def excl (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleKeyCols c.v c.di))
+
+-- | Space - toggle selection
+def space (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleSel c.v))
+
+-- | . - increase decimals
+def dot (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v true))
+
+-- | , - decrease decimals
+def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v false))
+
+-- | q - quit/pop
+def q (c : KeyCtx) : KeyResult := pure (quitOrPop c.s)
+
+-- | Esc - clear selections
+def esc (c : KeyCtx) : KeyResult := pure (match clearSel c.v with | some v => c.s.setCur v | none => c.s)
+
 -- | @ - column jump with fzf (finds DispIdx in display order)
 def atSign (c : KeyCtx) : KeyResult := do
   let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
@@ -314,9 +341,6 @@ def M (c : KeyCtx) : KeyResult := do
     let mv : View := ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
     pure (c.s.push mv)
   | .error e => pure (c.s.setMsg s!"meta error: {e}")
-
--- | I - toggle info overlay
-def I (c : KeyCtx) : KeyResult := pure { c.s with showInfo := !c.s.showInfo }
 
 -- | F - frequency view (works on any view)
 def F (c : KeyCtx) : KeyResult := do
@@ -437,18 +461,6 @@ def ret (c : KeyCtx) : KeyResult := do
   | .colMeta => retMeta c
   | .fld => retFld c
 
--- | T - duplicate view
-def T (c : KeyCtx) : KeyResult := pure c.s.dupView
-
--- | S - swap views
-def S (c : KeyCtx) : KeyResult := pure c.s.swapViews
-
--- | ! - toggle key column (keyCols is List String)
-def excl (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleKeyCols c.v c.di))
-
--- | Space - toggle column/row selection
-def space (c : KeyCtx) : KeyResult := pure (c.s.setCur (toggleSel c.v))
-
 -- | Parse agg function name to Prql.Agg
 def parseAgg : String → Option Prql.Agg
   | "count" => some .count | "sum" => some .sum | "average" => some .avg
@@ -492,12 +504,6 @@ def caret (c : KeyCtx) : KeyResult := do
   if c.s.testMode then pure { c.s with inputMode := .renameTo, inputBuf := "" }
   else pure c.s
 
--- | . - increase decimals
-def dot (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v true))
-
--- | , - decrease decimals
-def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur (adjDecimals c.v false))
-
 -- | L - load file
 def L (c : KeyCtx) : KeyResult := do
   match ← runFzf ["--prompt=Load: "] "" with
@@ -510,12 +516,6 @@ def L (c : KeyCtx) : KeyResult := do
 def r (c : KeyCtx) : KeyResult := do
   let rv : View := ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, [], [], none, 3⟩
   pure (c.s.push rv)
-
--- | q - quit/pop
-def q (c : KeyCtx) : KeyResult := pure (quitOrPop c.s)
-
--- | Esc - clear selections
-def esc (c : KeyCtx) : KeyResult := pure (match clearSel c.v with | some v => c.s.setCur v | none => c.s)
 
 end Key
 
