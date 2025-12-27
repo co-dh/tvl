@@ -61,7 +61,7 @@ abbrev KeyResult := IO State
 inductive PureKey where
   -- navigation
   | j | k | l | h | g | G | _0 | _1 | dollar | c_d | c_u
-  | retMeta (sel : Array String) | colJump (idx : DispIdx)
+  | colJump (idx : DispIdx)
   -- view transforms
   | sortAsc | sortDesc | D | toggleInfo | dup | swap
   | toggleKey | toggleSel | incDec (inc : Bool) | quit | clearSel
@@ -73,8 +73,6 @@ inductive PureKey where
   | inputRename | inputCmd
   -- agg
   | pushAgg (keys : Array String) (funcs : Array Prql.Agg) (cols : Array String)
-  -- meta view: pop to parent with keyCols
-  | popMeta
   -- enter key (pure cases only)
   | ret
 
@@ -233,7 +231,6 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .dollar => s.setCur { c.v with nav := adjOff c { n with colCur := ⟨lastCol⟩ } }
   | _, .c_d => s.setCur { c.v with nav := adjOff c { n with rowCur := min (n.rowCur + c.pg) lastRow } }
   | _, .c_u => s.setCur { c.v with nav := adjOff c { n with rowCur := n.rowCur - min n.rowCur c.pg } }
-  | _, .retMeta sel => s.setCur { c.v with nav := adjOff c { n with keyCols := sel, colCur := ⟨0⟩, colOff := ⟨0⟩ } }
   | _, .colJump idx => s.setCur { c.v with nav := adjOff c { n with colCur := idx } }
   -- view transforms
   | _, .sortAsc => s.setCur (sortBy c.v (curColName c) true)
@@ -263,9 +260,7 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
   | _, .inputCmd => { s with inputMode := .command, inputBuf := "" }
   | _, .pushAgg keys funcs cols => s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys funcs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
-  | _, .popMeta => if c.v.selRows.isEmpty then s
-                   else c.v.cache.map (fun st => popMetaState s (metaSelNames st c.v.selRows)) |>.getD s
-  -- ret: pure cases (colMeta -> popMeta, others -> no-op for pure, IO handled separately)
+  -- ret: pure cases (colMeta -> pop to parent, others -> no-op for pure, IO handled separately)
   | .colMeta, .ret => if c.v.selRows.isEmpty then s
                       else c.v.cache.map (fun st => popMetaState s (metaSelNames st c.v.selRows)) |>.getD s
   | .tbl, .ret => s  -- plain table: no-op (special sources handled in IO)
@@ -364,11 +359,11 @@ theorem runKey_l_colCur (c : KeyCtx) (s : State) :
     (runKey c .l s).curView.nav.colCur.val = min (c.v.nav.colCur.val + 1) lastCol := by
   simp [runKey, State.setCur]
 
--- | Theorem: retMeta sets keyCols = sel, cursor = 0
-theorem runKey_retMeta_cursor (c : KeyCtx) (sel : Array String) (s : State) :
-    (runKey c (.retMeta sel) s).curView.nav.colCur.val = 0 ∧
-    (runKey c (.retMeta sel) s).curView.nav.keyCols = sel := by
-  simp [runKey, State.setCur]
+-- | Theorem: popMetaState sets cursor = 0 and keyCols = sel
+theorem popMetaState_cursor (s : State) (sel : Array String) (h : s.parents.size > 0) :
+    (popMetaState s sel).curView.nav.colCur.val = 0 ∧
+    (popMetaState s sel).curView.nav.keyCols = sel := by
+  simp [popMetaState, h]
 
 
 -- | ret - enter key (dispatch by ViewKind, IO cases)
