@@ -174,22 +174,17 @@ def quitOrPop (s : State) : State :=
 def metaColDist' : Nat := 3   -- distinct count column
 def metaColNull' : Nat := 4   -- null% column
 
--- | Check if null% is 100% (fully null column)
-def isFullNull (str : String) : Bool := str == "100%"
+-- | Select rows where cell at column satisfies predicate
+def selectRows (st : SomeTable) (col : Nat) (pred : Cell → Bool) : Array Nat :=
+  (Array.range st.nRows).filter fun r => pred (st.table.getIdx r col)
 
--- | Pure: select rows where null% column is "100%"
+-- | Select 100% null columns
 def selectFullNull (st : SomeTable) : Array Nat :=
-  (Array.range st.nRows).filter fun r =>
-    match st.table.getIdx r metaColNull' with
-    | .str str => isFullNull str
-    | _ => false
+  selectRows st metaColNull' (·.str?.any (· == "100%"))
 
--- | Pure: select rows where dist == 1 (single-value cols)
+-- | Select single-value columns (distinct == 1)
 def selectSingleVal (st : SomeTable) : Array Nat :=
-  (Array.range st.nRows).filter fun r =>
-    match st.table.getIdx r metaColDist' with
-    | .int n => n == 1
-    | _ => false
+  selectRows st metaColDist' (·.int?.any (· == 1))
 
 -- | Adjust column offset to keep cursor visible
 def adjOff (c : KeyCtx) (nav : PureState) : PureState :=
@@ -280,11 +275,6 @@ def runKey (c : KeyCtx) (key : PureKey) (s : State) : State :=
   | .freqV _, .ret => s  -- freqV: handled in IO (retFreq)
 
 namespace Key
-
--- | Theorems for isFullNull
-theorem isFullNull_100 : isFullNull "100%" = true := rfl
-theorem isFullNull_0 : isFullNull "0%" = false := rfl
-theorem isFullNull_50 : isFullNull "50%" = false := rfl
 
 -- | @ - column jump with fzf
 def atSign (c : KeyCtx) (s : State) : KeyResult :=

@@ -97,6 +97,12 @@ def eq : Cell → Cell → Bool
 instance : BEq Cell where beq := eq
 instance : ToString Cell where toString := toString
 
+-- | Extract string value
+def str? : Cell → Option String | .str s => some s | _ => none
+
+-- | Extract int value
+def int? : Cell → Option Int | .int n => some n | _ => none
+
 -- | Compare floats
 def cmpFloat (a b : Float) : Ordering :=
   if a < b then .lt else if a > b then .gt else .eq
