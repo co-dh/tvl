@@ -328,41 +328,26 @@ def retFreq (c : KeyCtx) (colNames : String) (s : State) : KeyResult :=
   Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur cols.size
     <&> fun r => r.toOption.map (fun v => runKey c (.pushFreqFilter (buildCellFilter cols v) pq) s) |>.getD s
 
--- | ret on folder (source:ls): enter folder or open file with bat
-def retFld (c : KeyCtx) (s : State) : KeyResult := do
-  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur lsColCount with
-  | .error _ => pure s
-  | .ok vals =>
-    let perms := match vals.getD lsColPerms .null with | .str str => str | _ => ""
-    let name := match vals.getD lsColName .null with | .str str => str | _ => ""
-    if name.isEmpty then pure s
-    else
-      let baseDir := c.v.path.drop srcLs.length
-      let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
-      if perms.startsWith "d" then pure (runKey c (.pushFld fullPath name) s)
-      else runBat fullPath *> pure s
+-- | ret on source (ls/lr): enter directory or open file with bat
+def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
+  let mkPath := fun name => let base := c.v.path.drop pfx.length
+                            if base == "." then name else s!"{base}/{name}"
+  Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur srcColCount >>= fun r =>
+    r.toOption.bind (fun vals =>
+      vals.getD srcColPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
+        let perms := vals.getD srcColPerms .null |>.str?.getD ""
+        if perms.startsWith "d" then pure (runKey c (.pushFld (mkPath name) name) s)
+        else runBat (mkPath name) *> pure s
+    ) |>.getD (pure s)
 
--- | ret on tbl: no-op (could add row details later)
+-- | ret on folder (source:ls)
+def retFld (c : KeyCtx) (s : State) : KeyResult := retSource c s srcLs
+
+-- | ret on lr (source:lr)
+def retLr (c : KeyCtx) (s : State) : KeyResult := retSource c s srcLr
+
+-- | ret on tbl: no-op
 def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
-
--- | Extract string from cell
-def cellStr : Cell → Option String | .str s => some s | _ => none
-
--- | lr schema: 7 columns, path at index 6
-def lrColCount : Nat := 7
-def lrPathIdx : Nat := 6
-
--- | ret on lr (source:lr): open file with bat
--- 1. queryRow - fetches current row (7 columns from lr output)
--- 2. toOption - converts Except to Option (discards error)
--- 3. getD lrPathIdx - gets column 6 (file path), cellStr extracts string
--- 4. filter - discards if path is empty
--- 5. runBat - if path exists, open file in bat pager
--- 6. getD (pure s) - if any step failed, return unchanged state
-def retLr (c : KeyCtx) (s : State) : KeyResult :=
-  Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur lrColCount >>= fun r =>
-    r.toOption.bind (·.getD lrPathIdx .null |> cellStr) |>.filter (!·.isEmpty)
-      |>.map (runBat · *> pure s) |>.getD (pure s)
 
 -- | Theorem: j increments rowCur (clamped to lastRow)
 theorem runKey_j_rowCur (c : KeyCtx) (s : State) :

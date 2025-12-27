@@ -30,10 +30,10 @@ inductive ViewKind where
 -- | Default decimal places for float display
 def defDecimals : Nat := 3
 
--- | ls -l column indices (permissions, links, owner, group, size, month, day, time, name)
-def lsColCount : Nat := 9
-def lsColPerms : Nat := 0
-def lsColName  : Nat := 8
+-- | Source column indices (ls/lr share same schema)
+def srcColCount : Nat := 7
+def srcColPerms : Nat := 0
+def srcColPath  : Nat := 6
 
 -- | Single view with PRQL query
 structure View where
