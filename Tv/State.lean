@@ -4,6 +4,7 @@
 -/
 import Tv.Types
 import Tv.Backend
+import Tv.Prql
 
 namespace App
 
@@ -29,7 +30,7 @@ inductive ViewKind where
 -- | Single view with PRQL query
 structure View where
   path     : String              -- file path
-  prql     : String              -- PRQL query (from df | ...)
+  query    : Prql.Query := {}    -- PRQL query (type-safe)
   disp     : String := ""        -- display name for tab
   nav      : PureState := {}     -- navigation state
   vkind    : ViewKind := .tbl
@@ -101,26 +102,26 @@ def View.fetch (v : View) : IO (View × SomeTable × String) := do
   match v.cache with
   | some st => return (v, st, "")
   | none =>
-    match ← Backend.query (Backend.mkLimited v.prql maxRows) v.path with
+    let prql := v.query.render
+    match ← Backend.query (Backend.mkLimited prql maxRows) v.path with
     | .ok st =>
       let total ← match v.total with
         | some n => pure n
-        | none => match ← Backend.queryCount v.prql v.path with
+        | none => match ← Backend.queryCount prql v.path with
           | .ok n => pure n
           | .error _ => pure st.nRows
       return ({ v with cache := some st, total := some total }, st, "")
     | .error e =>
       Backend.logError s!"Query error: {e}"
-      -- Extract short error (first line after "Error:")
       let short := e.splitOn "───" |>.head? |>.getD e |>.take 80
       return (v, ⟨0, Table.empty⟩, short)
 
 -- | Invalidate cache (after PRQL change)
 def View.invalidate (v : View) : View := { v with cache := none }
 
--- | View.copy helper for updating PRQL and resetting cache/total
-def View.copy (v : View) (prql : String := v.prql) : View :=
-  { v with prql := prql, cache := none, total := none }
+-- | View.copy helper for updating query and resetting cache/total
+def View.copy (v : View) (query : Prql.Query := v.query) : View :=
+  { v with query := query, cache := none, total := none }
 
 -- | Format cell value for PRQL filter
 def cellToPrql : Cell → String

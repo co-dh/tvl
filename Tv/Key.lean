@@ -187,13 +187,11 @@ def dollar (c : KeyCtx) : KeyResult := pure (runNav c .dollar)
 
 -- | [ - sort ascending (via PRQL)
 def lbrak (c : KeyCtx) : KeyResult := do
-  let prql := (Prql.Query.parse c.v.prql).sortAsc (curColName c) |>.render
-  pure (c.s.setCur (c.v.copy (prql := prql)))
+  pure (c.s.setCur (c.v.copy (query := c.v.query.sortAsc (curColName c))))
 
 -- | ] - sort descending (via PRQL)
 def rbrak (c : KeyCtx) : KeyResult := do
-  let prql := (Prql.Query.parse c.v.prql).sortDesc (curColName c) |>.render
-  pure (c.s.setCur (c.v.copy (prql := prql)))
+  pure (c.s.setCur (c.v.copy (query := c.v.query.sortDesc (curColName c))))
 
 -- | D - delete column(s) using PRQL select whitelist
 def D (c : KeyCtx) : KeyResult := do
@@ -204,7 +202,6 @@ def D (c : KeyCtx) : KeyResult := do
   let allDelCols := c.v.nav.delCols ++ delNames.filter (!c.v.nav.delCols.contains ·)
   let keepCols := c.di.colNames.toList.filter (!delNames.contains ·)
   if keepCols.length > 0 then
-    let prql := (Prql.Query.parse c.v.prql).select keepCols |>.render
     let newDisp := s!"del {allDelCols.length}"
     let newKeyCols := c.v.nav.keyCols.filter (!delNames.contains ·)
     let maxCol := keepCols.length - 1
@@ -213,7 +210,7 @@ def D (c : KeyCtx) : KeyResult := do
       colOff := ⟨min c.v.nav.colOff.val maxCol⟩
       keyCols := newKeyCols
       delCols := allDelCols }
-    let v' := { c.v.copy (prql := prql) with nav := nav', disp := newDisp, selCols := [] }
+    let v' := { c.v.copy (query := c.v.query.select keepCols) with nav := nav', disp := newDisp, selCols := [] }
     pure (c.s.setCur v'.invalidate)
   else pure c.s
 
@@ -231,25 +228,24 @@ def atSign (c : KeyCtx) : KeyResult := do
 -- | \ - filter with fzf
 def backslash (c : KeyCtx) : KeyResult := do
   let col := curColName c
-  match ← Backend.queryDistinct c.v.prql c.v.path col with
+  match ← Backend.queryDistinct c.v.query.render c.v.path col with
   | .ok vals =>
     let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
     match ← runFzf ["--print-query", "--prompt=" ++ prompt] (String.intercalate "\n" vals) with
     | some result =>
       let lines := result.splitOn "\n" |>.filter (!·.isEmpty)
-      let query := lines.headD ""
+      let input := lines.headD ""
       let fromHints := (lines.tailD []).filter vals.contains
       let expr := if fromHints.length == 1 then s!"{col} == '{fromHints.head!}'"
         else if fromHints.length > 1 then
           "(" ++ String.intercalate " || " (fromHints.map fun v => s!"{col} == '{v}'") ++ ")"
-        else if !query.isEmpty then
-          if query.startsWith ">" || query.startsWith "<" || query.startsWith "=" || query.startsWith "~"
-          then s!"{col} {query}" else query
+        else if !input.isEmpty then
+          if input.startsWith ">" || input.startsWith "<" || input.startsWith "=" || input.startsWith "~"
+          then s!"{col} {input}" else input
         else ""
       if expr.isEmpty then pure c.s
       else
-        let prql := (Prql.Query.parse c.v.prql).filter expr |>.render
-        let fv : View := ⟨c.v.path, prql, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
+        let fv : View := ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
         pure (c.s.push fv)
     | none => pure c.s
   | .error _ => pure c.s
@@ -262,15 +258,14 @@ def s (c : KeyCtx) : KeyResult := do
     let colNamesStr := c.di.colNames.toList |> String.intercalate "\n"
     let selected ← runFzfMulti ["--prompt=Select: "] colNamesStr
     if selected.length > 0 then
-      let prql := (Prql.Query.parse c.v.prql).select selected |>.render
-      pure (c.s.setCur (c.v.copy (prql := prql)))
+      pure (c.s.setCur (c.v.copy (query := c.v.query.select selected)))
     else pure c.s
 
 -- | M - meta view (works on any view)
 def M (c : KeyCtx) : KeyResult := do
-  match ← Backend.queryMeta c.v.prql c.v.path with
+  match ← Backend.queryMeta c.v.query.render c.v.path with
   | .ok metaTbl =>
-    let mv : View := ⟨c.v.path, c.v.prql, "meta", {}, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
+    let mv : View := ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, [], [], some metaTbl.nRows, 3⟩
     pure (c.s.push mv)
   | .error e => pure (c.s.setMsg s!"meta error: {e}")
 
@@ -281,29 +276,27 @@ def I (c : KeyCtx) : KeyResult := pure { c.s with showInfo := !c.s.showInfo }
 def F (c : KeyCtx) : KeyResult := do
   let cols := if c.v.nav.keyCols.isEmpty then [curColName c] else c.v.nav.keyCols
   let colStr := String.intercalate "," cols
-  let q := Prql.Query.parse c.v.prql
-  let prql := if cols.length == 1 then q.freq cols.head! |>.render else q.freqFull cols |>.render
+  let query := if cols.length == 1 then c.v.query.freq cols.head! else c.v.query.freqFull cols
   let nav : PureState := { keyCols := cols }
-  let fv : View := ⟨c.v.path, prql, s!"freq {colStr}", nav, .freqV colStr, none, [], [], none, 3⟩
+  let fv : View := ⟨c.v.path, query, s!"freq {colStr}", nav, .freqV colStr, none, [], [], none, 3⟩
   pure (c.s.push fv)
 
 -- | ret on freqV: push filtered view based on selected row
 def retFreq (c : KeyCtx) (colNames : String) : KeyResult := do
   let cols := colNames.splitOn "," |>.map String.trim
-  match ← Backend.queryRow c.v.prql c.v.path c.v.nav.rowCur cols.length with
+  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur cols.length with
   | .error _ => pure c.s
   | .ok vals =>
     let filters := (List.range cols.length).zip cols |>.map fun (i, cn) =>
       s!"{cn} == {cellToPrql (vals.getD i .null)}"
     let expr := String.intercalate " && " filters
-    let parentPrql := match c.s.views.tail? with | some (pv :: _) => pv.prql | _ => "from df"
-    let prql := (Prql.Query.parse parentPrql).filter expr |>.render
-    let fv : View := ⟨c.v.path, prql, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
+    let parentQuery := match c.s.views.tail? with | some (pv :: _) => pv.query | _ => {}
+    let fv : View := ⟨c.v.path, parentQuery.filter expr, s!"filter {expr}", {}, .tbl, none, [], [], none, c.v.decimals⟩
     pure (c.s.push fv)
 
 -- | ret on folder (source:ls): enter folder or open file with bat
 def retFld (c : KeyCtx) : KeyResult := do
-  match ← Backend.queryRow c.v.prql c.v.path c.v.nav.rowCur 9 with
+  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur 9 with
   | .error _ => pure c.s
   | .ok vals =>
     let perms := match vals.getD 0 .null with | .str str => str | _ => ""
@@ -313,7 +306,7 @@ def retFld (c : KeyCtx) : KeyResult := do
       let baseDir := if c.v.path == "source:ls" then "." else c.v.path.drop 10
       let fullPath := if baseDir == "." then name else s!"{baseDir}/{name}"
       if perms.startsWith "d" then
-        let lsv : View := ⟨s!"source:ls:{fullPath}", "from df", s!"ls {name}", {}, .tbl, none, [], [], none, 3⟩
+        let lsv : View := ⟨s!"source:ls:{fullPath}", {}, s!"ls {name}", {}, .tbl, none, [], [], none, 3⟩
         pure (c.s.push lsv)
       else
         runBat fullPath
@@ -324,7 +317,7 @@ def retTbl (_ : KeyCtx) (s : State) : KeyResult := pure s
 
 -- | ret on lr (source:lr): open file with bat
 def retLr (c : KeyCtx) : KeyResult := do
-  match ← Backend.queryRow c.v.prql c.v.path c.v.nav.rowCur 7 with
+  match ← Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur 7 with
   | .error _ => pure c.s
   | .ok vals =>
     let path := match vals.getD 6 .null with | .str s => s | _ => ""
@@ -461,8 +454,7 @@ def b (c : KeyCtx) : KeyResult := do
           pure (names.filterMap parseAgg)
       if funcs.isEmpty then pure c.s
       else
-        let prql := (Prql.Query.parse c.v.prql).agg keyNames funcs aggNames |>.render
-        let av : View := ⟨c.v.path, prql, "agg", {}, .tbl, none, [], [], none, 3⟩
+        let av : View := ⟨c.v.path, c.v.query.agg keyNames funcs aggNames, "agg", {}, .tbl, none, [], [], none, 3⟩
         let s' := c.s.setCur { c.v with selCols := [] }
         pure (s'.push av)
 
@@ -472,7 +464,7 @@ def colon (c : KeyCtx) : KeyResult := do
   else
     match ← runFzf ["--prompt=: "] "ps\nenv\ndf\nls\ntcp" with
     | some cmd =>
-      let sv : View := ⟨s!"source:{cmd}", "from df", "", {}, .tbl, none, [], [], none, 3⟩
+      let sv : View := ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, [], [], none, 3⟩
       pure (c.s.push sv)
     | none => pure c.s
 
@@ -491,13 +483,13 @@ def comma (c : KeyCtx) : KeyResult := pure (c.s.setCur { c.v with decimals := if
 def L (c : KeyCtx) : KeyResult := do
   match ← runFzf ["--prompt=Load: "] "" with
   | some path =>
-    let lv : View := ⟨path, "from df", "", {}, .tbl, none, [], [], none, 3⟩
+    let lv : View := ⟨path, {}, "", {}, .tbl, none, [], [], none, 3⟩
     pure (c.s.push lv)
   | none => pure c.s
 
 -- | r - recursive file listing
 def r (c : KeyCtx) : KeyResult := do
-  let rv : View := ⟨"source:lr:.", "from df", "lr ./", {}, .tbl, none, [], [], none, 3⟩
+  let rv : View := ⟨"source:lr:.", {}, "lr ./", {}, .tbl, none, [], [], none, 3⟩
   pure (c.s.push rv)
 
 -- | q - quit/pop

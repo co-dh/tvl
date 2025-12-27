@@ -75,6 +75,13 @@ def test_delete_twice_different_columns : IO Unit := do
   assert (!contains hdr "age") s!"age should be deleted: {hdr}"
   assert (contains hdr "year") s!"year should be first column: {hdr}"
 
+-- | Bug: D then key 2 cols then F would fail with EXCLUDE syntax (PRQL doesn't support it)
+def test_delete_key_freq : IO Unit := do
+  let output ← runKeys "Dl l !F" "tests/data/sample.parquet"
+  let (tab, status) := footer output
+  assert (contains tab "freq") s!"D+key+F should show freq: {tab}"
+  assert (!contains status "Error") s!"D+key+F should not error: {status}"
+
 def test_sort_asc_orders_first_row_smallest : IO Unit := do
   let output ← runKeys "[" "tests/data/unsorted.csv"
   let rows := dataLines output
@@ -370,6 +377,7 @@ def main : IO Unit := do
   test_freq_a_in_tab_line
   test_freq_enter_filters_parent
   test_delete_twice_different_columns
+  test_delete_key_freq
   test_sort_asc_orders_first_row_smallest
   test_sort_desc_orders_first_row_largest
   test_meta_shows_column_stats

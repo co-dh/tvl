@@ -49,8 +49,13 @@ def Dir.render (d : Dir) (col : String) : String :=
   let qc := quote col
   match d with | .asc => qc | .desc => s!"-{qc}"
 
--- | Render aggregate function name
+-- | Render aggregate function name (std. prefix to avoid column name conflicts)
 def Agg.name : Agg → String
+  | .count => "std.count" | .sum => "std.sum" | .avg => "std.average"
+  | .min => "std.min" | .max => "std.max" | .stddev => "std.stddev"
+
+-- | Short name for result column (no std. prefix)
+def Agg.short : Agg → String
   | .count => "count" | .sum => "sum" | .avg => "average"
   | .min => "min" | .max => "max" | .stddev => "stddev"
 
@@ -71,10 +76,10 @@ def Op.render : Op → String
     let pairs := bs.map fun (n, e) => s!"{quote n} = {e}"
     s!"derive \{{String.intercalate ", " pairs}}"
   | .group keys aggs =>
-    let ks := String.intercalate ", " keys
-    let as := aggs.map fun (fn, name, col) => s!"{name} = {fn.name} {col}"
+    let ks := String.intercalate ", " (keys.map quote)
+    let as := aggs.map fun (fn, name, col) => s!"{name} = {fn.name} {quote col}"
     s!"group \{{ks}} (aggregate \{{String.intercalate ", " as}})"
-  | .freq col => s!"freq {col}"
+  | .freq col => s!"freq {quote col}"
   | .take n => s!"take {n}"
   | .colMeta col => s!"meta {quote col}"  -- uses meta function from prqlFuncs
 
@@ -110,14 +115,14 @@ def Query.freq (q : Query) (col : String) : Query := q.pipe (.freq col)
 -- | Frequency query with percentage bar (common pattern)
 def Query.freqFull (q : Query) (cols : List String) : Query :=
   let grp : Op := .group cols [(.count, "Cnt", "this")]
-  let pct : Op := .derive [("Pct", "Cnt * 100 / sum Cnt"),
+  let pct : Op := .derive [("Pct", "Cnt * 100 / std.sum Cnt"),
                            ("Bar", "s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"")]
   let srt : Op := .sort [("Cnt", .desc)]
   { q with ops := q.ops ++ [grp, pct, srt] }
 
 -- | Aggregate query (group by keys, apply funcs to cols)
 def Query.agg (q : Query) (keys : List String) (funcs : List Agg) (cols : List String) : Query :=
-  let aggs := funcs.flatMap fun f => cols.map fun c => (f, s!"{f.name}_{c}", c)
+  let aggs := funcs.flatMap fun f => cols.map fun c => (f, s!"{f.short}_{c}", c)
   q.pipe (.group keys aggs)
 
 -- | Column metadata query (cnt, distinct, total, min, max)

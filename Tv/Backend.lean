@@ -57,13 +57,13 @@ def loadMetaCache (path : String) : IO (Option SomeTable) := do
   catch _ => return none
 
 -- | PRQL function definitions (prepended to all queries)
--- | Matches rust tv's cfg/funcs.prql
+-- | Matches rust tv's cfg/funcs.prql (use std.count to avoid ambiguity with column named 'count')
 def prqlFuncs : String := "
-let freq  = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = count this}) | derive {Pct = Cnt * 100 / sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
-let cnt   = func tbl   <relation> -> (from tbl | aggregate {n = count this})
+let freq  = func c tbl <relation> -> (from tbl | group {c} (aggregate {Cnt = std.count this}) | derive {Pct = Cnt * 100 / std.sum Cnt, Bar = s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"} | sort {-Cnt})
+let cnt   = func tbl   <relation> -> (from tbl | aggregate {n = std.count this})
 let uniq  = func c tbl <relation> -> (from tbl | group {c} (take 1) | select {c})
-let stats = func c tbl <relation> -> (from tbl | aggregate {n = count this, min = min c, max = max c, avg = average c, std = stddev c})
-let meta  = func c tbl <relation> -> (from tbl | aggregate {cnt = s\"COUNT({c})\", dist = count_distinct c, total = count this, min = min c, max = max c})
+let stats = func c tbl <relation> -> (from tbl | aggregate {n = std.count this, min = std.min c, max = std.max c, avg = std.average c, std = std.stddev c})
+let meta  = func c tbl <relation> -> (from tbl | aggregate {cnt = s\"COUNT({c})\", dist = std.count_distinct c, total = std.count this, min = std.min c, max = std.max c})
 "
 
 -- | Theorems: freq PRQL includes required columns
@@ -247,7 +247,7 @@ theorem mkLimited_example : hasLimit "from df | take 1000" = true := by native_d
 
 -- | Get total row count for PRQL query
 def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
-  let countPrql := prql ++ " | aggregate {n = count this}"
+  let countPrql := prql ++ " | aggregate {n = std.count this}"
   match ← query (mkLimited countPrql 1) path with
   | .error e => return .error e
   | .ok st =>

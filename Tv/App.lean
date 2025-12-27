@@ -19,8 +19,7 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let cols := s.inputBuf.splitOn "," |>.map String.trim |>.filter (!·.isEmpty)
       if cols.length > 0 then
-        let prql := (Prql.Query.parse v.prql).select cols |>.render
-        return some { s.setCur (v.copy (prql := prql)) with inputMode := .none, inputBuf := "" }
+        return some { s.setCur (v.copy (query := v.query.select cols)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -30,9 +29,8 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       if !newName.isEmpty then
         let oldName := di.colNames.getDisp v.nav.colCur "?"
         let newCols := di.colNames.toList.map fun n => if n == oldName then newName else n
-        let q := Prql.Query.parse v.prql
-        let prql := q.derive1 newName (Prql.quote oldName) |>.select newCols |>.render
-        return some { s.setCur (v.copy (prql := prql)) with inputMode := .none, inputBuf := "" }
+        let query := v.query.derive1 newName (Prql.quote oldName) |>.select newCols
+        return some { s.setCur (v.copy (query := query)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -40,8 +38,7 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let expr := s.inputBuf.trim
       if !expr.isEmpty then
-        let prql := (Prql.Query.parse v.prql).filter expr |>.render
-        return some { s.setCur { v.copy (prql := prql) with nav := {} } with inputMode := .none, inputBuf := "" }
+        return some { s.setCur { v.copy (query := v.query.filter expr) with nav := {} } with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -50,18 +47,16 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       let cmd := s.inputBuf.trim
       if cmd.startsWith "freq " then
         let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim
-        let prql := (Prql.Query.parse v.prql).freqFull cols |>.render
         let nav : PureState := { keyCols := cols }
-        let fv : View := ⟨v.path, prql, s!"freq {String.intercalate "," cols}", nav, .freqV (String.intercalate "," cols), none, [], [], none, 3⟩
+        let fv : View := ⟨v.path, v.query.freqFull cols, s!"freq {String.intercalate "," cols}", nav, .freqV (String.intercalate "," cols), none, [], [], none, 3⟩
         return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
-        let lrv : View := ⟨s!"source:lr:{dir}", "from df", s!"lr {dir}", {}, .tbl, none, [], [], none, 3⟩
+        let lrv : View := ⟨s!"source:lr:{dir}", {}, s!"lr {dir}", {}, .tbl, none, [], [], none, 3⟩
         return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
-        let prql := (Prql.Query.parse v.prql).filter expr |>.render
-        return some { s.setCur { v.copy (prql := prql) with nav := {} } with inputMode := .none, inputBuf := "" }
+        return some { s.setCur { v.copy (query := v.query.filter expr) with nav := {} } with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "", msg := s!"unknown: {cmd}" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
@@ -134,7 +129,7 @@ partial def loop (s : State) : IO Unit := do
   let selColIdxs := v'.selCols.map fun d => Render.colIndex (dispCols.getDisp d "") di.colNames
   Render.header tbl cols curColOrig (h - 3) selColIdxs
   if !v'.nav.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.default Term.default "|"
-  let views := s.views.map fun v => (v.path, v.disp, v.prql)
+  let views := s.views.map fun v => (v.path, v.disp, v.query.render)
   Render.tabLine views (h - 2) w.toNat
   Render.statusBar v'.nav.rowCur v'.nav.colCur.val v'.nav.colOff.val (v'.total.getD di.nRows) w.toNat
                    v'.nav.keyCols v'.selCols v'.selRows di.colNames (h - 1) s.msg s.err
@@ -172,7 +167,7 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
   if r < 0 then
     Backend.logError "Failed to init terminal"
     return
-  let v : View := ⟨path, "from df", "", {}, .tbl, none, [], [], none, 3⟩
+  let v : View := ⟨path, {}, "", {}, .tbl, none, [], [], none, 3⟩
   let s : State := { curView := v, keys := keys.toList, testMode := testMode }
   loop s
   Backend.shutdown
