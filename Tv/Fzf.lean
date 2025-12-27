@@ -2,6 +2,7 @@
   Fzf: helpers for running fzf picker and bat viewer
 -/
 import Tv.Term
+import Tv.Types
 
 namespace App
 
@@ -37,6 +38,28 @@ def runBat (path : String) : IO Unit := do
     stdout := .inherit
   } >>= (·.wait)
   let _ ← Term.init
+
+-- | Run fzf with numbered items, return selected index
+def runFzfIdx (opts : List String) (items : Array String) : IO (Option DispIdx) := do
+  Term.shutdown
+  let numbered := items.mapIdx fun i s => s!"{i}\t{s}"
+  let child ← IO.Process.spawn {
+    cmd := "fzf"
+    args := ("--with-nth=2.." :: "--height=50%" :: "--layout=reverse" :: opts).toArray
+    stdin := .piped
+    stdout := .piped
+  }
+  child.stdin.putStr (String.intercalate "\n" numbered.toList)
+  child.stdin.flush
+  let (_, child') ← child.takeStdin
+  let out ← child'.stdout.readToEnd
+  let _ ← child'.wait
+  let _ ← Term.init
+  let line := out.trim
+  if line.isEmpty then return none
+  match line.splitOn "\t" |>.head? |>.bind String.toNat? with
+  | some n => return some ⟨n⟩
+  | none => return none
 
 -- | Run fzf multi-select
 def runFzfMulti (opts : List String) (input : String) : IO (List String) := do
