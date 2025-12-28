@@ -33,9 +33,9 @@ def isSource (path : String) : Bool := path.startsWith pfx
 def lsCols : String := "permissions,links,owner,grp,size,datetime,path"
 def envCols : String := "name,value"
 
--- | Awk command to print first n fields tab-separated
+-- | Awk command to print first n fields tab-separated (no trailing tab)
 def awkN (n : Nat) : String :=
-  " | awk '{for(i=1;i<=" ++ toString n ++ ";i++) printf \"%s\\t\",$i; print \"\"}'"
+  " | awk '{printf \"%s\",$1; for(i=2;i<=" ++ toString n ++ ";i++) printf \"\\t%s\",$i; print \"\"}'"
 
 -- | find printf format for ls/lr (perms, links, owner, group, size, datetime, path)
 def findFmt : String := "\"%M\\t%n\\t%u\\t%g\\t%s\\t%TY-%Tm-%Td_%TH:%TM\\t%p\\n\""
