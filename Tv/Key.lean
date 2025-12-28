@@ -259,6 +259,11 @@ def s (c : KeyCtx) (st : State) : KeyResult :=
     <&> fun cols => runKey c (.s cols) st
 
 -- | M - meta view (works on any view)
+-- queryMeta returns IO (Except String SomeTable)
+-- <&>         : Functor.map flipped, applies fn to value inside IO
+-- r.toOption  : Except→Option, discards error string on .error
+-- .map        : Option.map, applies fn to Some value, None passes through
+-- |>.getD s   : Option.getD, unwrap Some or return default state s
 def M (c : KeyCtx) (s : State) : KeyResult :=
   Meta.queryMeta c.v.query.render c.v.path
     <&> fun r => r.toOption.map (fun t => runKey c (.M t) s) |>.getD s
