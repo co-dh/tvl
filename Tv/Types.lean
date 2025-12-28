@@ -173,7 +173,7 @@ inductive PureKey where
   | asc | desc | D | I | dup | swap
   | bang | spc | incDec (inc : Bool) | q | esc
   -- views (push new view)
-  | F | pushFilter (expr : String) | selectCols (cols : Array String)
+  | F | backslash (expr : String) | selectCols (cols : Array String)
   | pushMeta (metaTbl : SomeTable) | pushFile (path : String)
   -- input modes
   | inputRename

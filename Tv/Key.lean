@@ -204,7 +204,7 @@ where
     | _, .F => let cur := curColName c
                let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
                s.push (Freq.mkView c.v cols)
-    | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
+    | _, .backslash expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
     | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
     | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
     | _, .pushFile path => s.push ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
@@ -251,7 +251,7 @@ def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
   (← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode)
     |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
-    |>.map (fun expr => runKey c (.pushFilter expr) s) |>.getD s |> pure
+    |>.map (fun expr => runKey c (.backslash expr) s) |>.getD s |> pure
 
 -- | s - select columns
 def sel (c : KeyCtx) (s : State) : KeyResult :=
