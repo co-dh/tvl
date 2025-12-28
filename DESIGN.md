@@ -212,6 +212,7 @@ lean/
 │   ├── Prql.lean      # type-safe PRQL builder
 │   ├── Source.lean    # system sources (ps,df,env,ls,lr)
 │   ├── Meta.lean      # meta view logic
+│   ├── Freq.lean      # freq view logic
 │   ├── Render.lean    # displayOrder, visibleRange, render
 │   ├── Key.lean       # all key handlers (nav,view,agg)
 │   ├── Fzf.lean       # fzf picker, bat viewer
