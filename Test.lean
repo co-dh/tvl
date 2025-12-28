@@ -334,6 +334,16 @@ def test_numeric_right_align : IO Unit := do
   -- Values should have leading spaces (right-aligned)
   assert (contains first "  ") s!"Should have spacing for alignment: {first}"
 
+-- | ps TIME column should be time type (not str)
+def test_ps_time_column_type : IO Unit := do
+  let output ← runKeys ":M" "tests/data/basic.csv"
+  -- In meta view, TIME row should show type "time" not "str"
+  assert (contains output "TIME") s!"ps should have TIME column: {output}"
+  -- Check that the line with TIME has "time" type
+  let lines := output.splitOn "\n" |>.filter (contains · "TIME")
+  let timeLine := lines.headD ""
+  assert (contains timeLine "time") s!"TIME should be time type: {timeLine}"
+
 -- | Verify no stderr writes (grep source for eprintln)
 def test_no_stderr : IO Unit := do
   let out ← IO.Process.output { cmd := "grep", args := #["-r", "eprintln", "Tv/"] }
@@ -445,6 +455,7 @@ def main : IO Unit := do
   test_multi_column_freq_enter
   test_lr_paths
   test_numeric_right_align
+  test_ps_time_column_type
   test_no_stderr
   test_lr_view
   test_lr_files

@@ -40,11 +40,19 @@ def awkN (n : Nat) : String :=
 -- | find printf format for ls/lr (perms, links, owner, group, size, datetime, path)
 def findFmt : String := "\"%M\\t%n\\t%u\\t%g\\t%s\\t%TY-%Tm-%Td_%TH:%TM\\t%p\\n\""
 
+-- | Awk for ps: fields 1-9, TIME (field 10) converted M:SS→HH:MM:SS, field 11
+-- NR==1 prints header as-is, NR>1 converts TIME column
+def awkPs : String :=
+  " | awk 'NR==1 {printf \"%s\",$1; for(i=2;i<=11;i++) printf \"\\t%s\",$i; print \"\"; next} " ++
+  "{printf \"%s\",$1; for(i=2;i<=9;i++) printf \"\\t%s\",$i; " ++
+  "split($10,t,\":\"); m=t[1]; s=t[2]; h=int(m/60); m=m%60; " ++
+  "printf \"\\t%02d:%02d:%02d\\t%s\", h, m, s, $11; print \"\"}'"
+
 -- | Build shell command that outputs tab-separated data
 -- Returns (cmd, hasHeader). ls/lr without path default to "."
 def shellCmd (src : String) : String × Bool :=
   match src with
-  | "ps"  => ("ps aux" ++ awkN 11, true)
+  | "ps"  => ("ps aux" ++ awkPs, true)
   | "df"  => ("df -h" ++ awkN 6, true)
   | "env" => ("env | awk -F= '{print $1\"\\t\"substr($0,index($0,\"=\")+1)}'", false)
   | "ls"  => (s!"find . -maxdepth 1 -printf {findFmt} 2>/dev/null", false)
