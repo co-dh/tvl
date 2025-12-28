@@ -357,6 +357,14 @@ def test_lr_meta_types : IO Unit := do
   assert (contains output "int64") s!"size should be int64: {output}"
   assert (contains output "time") s!"datetime should be timestamp (time): {output}"
 
+-- | lr should have 7 columns (permissions, links, owner, grp, size, datetime, path)
+def test_lr_columns : IO Unit := do
+  let output ← runKeys "rM" "tests/data/basic.csv"
+  -- Meta view shows 7 rows for 7 columns
+  assert (contains output "0/7") s!"lr should have 7 columns: {output}"
+  assert (contains output "permissions") s!"should have permissions: {output}"
+  assert (contains output "path") s!"should have path: {output}"
+
 -- | M0<ret>llllll: select null cols as keys, navigate right, cursor should stay visible
 -- multi_null.csv has cols a,b,c,d,e where b,c,d are null
 -- After M0<ret>, keyCols=[1,2,3] (b,c,d), then l should navigate in display order
@@ -427,6 +435,7 @@ def main : IO Unit := do
   test_ls_view
   test_lr_files
   test_lr_meta_types
+  test_lr_columns
   test_multi_null_keycols_nav
 
   Backend.shutdown

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <dlfcn.h>
+#include <time.h>
 
 /* === ADBC Structures (from Arrow ADBC spec) === */
 
@@ -550,6 +551,19 @@ lean_obj_res lean_qr_cell_str(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col,
         snprintf(buf, sizeof(buf), "%.*f", scale, val);
         return lean_io_result_mk_ok(lean_mk_string(buf));
     }
+    if (fmt[0] == 't' && fmt[1] == 's') {  // timestamp (tsu:, tsm:, tsn:, tss:)
+        // Stored as int64 microseconds since epoch (for tsu:)
+        const int64_t* data = (const int64_t*)arr->buffers[1];
+        int64_t idx = arr->offset + lr;
+        int64_t us = data[idx];
+        // Convert to seconds and format as ISO datetime
+        time_t secs = us / 1000000;
+        struct tm* tm = gmtime(&secs);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+                 tm->tm_hour, tm->tm_min, tm->tm_sec);
+        return lean_io_result_mk_ok(lean_mk_string(buf));
+    }
 
     // Unknown format - return format string for debug
     return lean_io_result_mk_ok(lean_mk_string(fmt));
@@ -689,6 +703,7 @@ static size_t cell_str_len(QueryResult* qr, int64_t row, int64_t col) {
     }
     if (fmt[0] == 'b') return 5;  // "true" or "false"
     if (fmt[0] == 'd') return 20; // decimal estimate
+    if (fmt[0] == 't' && fmt[1] == 's') return 19;  // "YYYY-MM-DD HH:MM:SS"
     return 1;  // unknown
 }
 
