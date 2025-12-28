@@ -993,11 +993,17 @@ lean_obj_res lean_render_table(
     uint8_t decimals,
     lean_obj_arg world) {
 
+    log_msg("[render] entry\n");
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
+    log_msg("[render] got qr\n");
     size_t ncols = lean_array_size(colIdxs);
+    log_msg("[render] ncols=%zu nKeyCols=%lu colOff=%lu\n", ncols, (unsigned long)nKeyCols, (unsigned long)colOff);
     size_t nSelCols = lean_array_size(selColIdxs);
     size_t nSelRows = lean_array_size(selRows);
+    size_t nStyles = lean_array_size(styles);
+    log_msg("[render] nSelCols=%zu nSelRows=%zu nStyles=%zu\n", nSelCols, nSelRows, nStyles);
     int screenW = tb_width();
+    log_msg("[render] screenW=%d\n", screenW);
     char buf[CELL_BUF_SIZE];
 
     // compute widths and x positions (start from colOff)
@@ -1027,6 +1033,8 @@ lean_obj_res lean_render_table(
     size_t visKeys = (colOff < nKeyCols) ? nKeyCols - colOff : 0;
     if (visKeys > visCols) visKeys = visCols;
     if (visKeys > 0) sepX = ci[visKeys - 1].x + ci[visKeys - 1].w;
+    log_msg("[render] sepX=%d nKeyCols=%lu colOff=%lu visKeys=%zu visCols=%zu\n",
+            sepX, (unsigned long)nKeyCols, (unsigned long)colOff, visKeys, visCols);
 
     // extract styles
     uint32_t stFg[NUM_STYLES], stBg[NUM_STYLES];
@@ -1059,16 +1067,21 @@ lean_obj_res lean_render_table(
     // find starting batch for r0
     int64_t batch_offset;
     int64_t bi_start = find_batch_start(qr, (int64_t)r0, &batch_offset);
+    log_msg("[render] r0=%ld r1=%ld bi_start=%ld batch_offset=%ld visCols=%zu\n",
+            (long)r0, (long)r1, (long)bi_start, (long)batch_offset, visCols);
 
     // iterate only needed batches
     for (int64_t bi = bi_start; bi < qr->n_batches && batch_offset < (int64_t)r1; bi++) {
         struct ArrowArray* batch = &qr->batches[bi];
         int64_t batch_len = batch->length;
         int64_t batch_end = batch_offset + batch_len;
+        log_msg("[render] batch %ld: offset=%ld len=%ld end=%ld\n",
+                (long)bi, (long)batch_offset, (long)batch_len, (long)batch_end);
 
         // local row range within batch
         int64_t lr0 = ((int64_t)r0 > batch_offset) ? (int64_t)r0 - batch_offset : 0;
         int64_t lr1 = ((int64_t)r1 < batch_end) ? (int64_t)r1 - batch_offset : batch_len;
+        log_msg("[render] batch %ld: lr0=%ld lr1=%ld\n", (long)bi, (long)lr0, (long)lr1);
 
         // for each visible column
         for (size_t c = 0; c < visCols; c++) {
@@ -1116,6 +1129,8 @@ lean_obj_res lean_render_table(
         }
         batch_offset = batch_end;
     }
+
+    log_msg("[render] done\n");
 
     // build return array: Array (Nat × Nat × Nat) = Array (Nat × (Nat × Nat))
     lean_object* result = lean_alloc_array(visCols, visCols);
