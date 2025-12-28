@@ -72,8 +72,6 @@ def Query.render (q : Query) : String :=
 -- | Pipe: append operation to query
 def Query.pipe (q : Query) (op : Op) : Query := { q with ops := q.ops.push op }
 
--- | Convenient operators
-instance : HAppend Query Op Query where hAppend := Query.pipe
 infixl:65 " |> " => Query.pipe  -- q |> .filter "x > 5"
 
 -- | Builder helpers

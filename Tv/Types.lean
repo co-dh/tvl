@@ -90,16 +90,6 @@ def toStringD (c : Cell) (decimals : Nat) : String :=
   | .float f => fmtFloat f decimals
   | _ => c.toString
 
--- | Cell equality
-def eq : Cell → Cell → Bool
-  | .null, .null => true
-  | .int a, .int b => a == b
-  | .float a, .float b => a == b
-  | .str a, .str b => a == b
-  | .bool a, .bool b => a == b
-  | _, _ => false
-
-instance : BEq Cell where beq := eq
 instance : ToString Cell where toString := toString
 
 -- | Extract string value
@@ -107,30 +97,6 @@ def str? : Cell → Option String | .str s => some s | _ => none
 
 -- | Extract int value
 def int? : Cell → Option Int | .int n => some n | _ => none
-
--- | Compare floats
-def cmpFloat (a b : Float) : Ordering :=
-  if a < b then .lt else if a > b then .gt else .eq
-
--- | Compare cells (for sorting): null < bool < int/float < str
-def compare : Cell → Cell → Ordering
-  | .null, .null => .eq
-  | .null, _ => .lt
-  | _, .null => .gt
-  | .bool a, .bool b => if a == b then .eq else if a then .gt else .lt
-  | .bool _, _ => .lt
-  | _, .bool _ => .gt
-  | .int a, .int b => Ord.compare a b
-  | .int a, .float b => cmpFloat (Float.ofInt a) b
-  | .float a, .int b => cmpFloat a (Float.ofInt b)
-  | .float a, .float b => cmpFloat a b
-  | .int _, .str _ => .lt
-  | .float _, .str _ => .lt
-  | .str _, .int _ => .gt
-  | .str _, .float _ => .gt
-  | .str a, .str b => Ord.compare a b
-
-instance : Ord Cell where compare := compare
 
 end Cell
 
