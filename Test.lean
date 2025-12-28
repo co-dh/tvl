@@ -256,6 +256,13 @@ def test_decimal_increase : IO Unit := do
   -- After '.', decimals goes from 3 to 4: 1.1235 (rounded)
   assert (contains output "1.1235") s!"Should show 4 decimals: {output}"
 
+def test_decimal_width_recalc : IO Unit := do
+  -- floats.csv has 1.123456 - increase decimals from 3 to 9
+  -- Bug: width calculated with %g, but rendered with %.*f decimals
+  let output ← runKeys "......" "tests/data/floats.csv"
+  -- With 9 decimals, should show 1.123456000 (trailing zeros)
+  assert (contains output "1.123456000") s!"Should show 9 decimals with trailing zeros: {output}"
+
 def test_decimal_decrease : IO Unit := do
   let output ← runKeys "," "tests/data/floats.csv"
   let rows := dataLines output
@@ -454,6 +461,7 @@ def main : IO Unit := do
   test_freq_multi_key_enter
   test_freq_enter_pushes_view
   test_decimal_increase
+  test_decimal_width_recalc
   test_decimal_decrease
   test_meta_select_rows_xkey_parent
   test_meta_0_select_null_cols

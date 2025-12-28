@@ -446,61 +446,23 @@ lean_obj_res lean_qr_cell_is_null(b_lean_obj_arg qr_obj, uint64_t row, uint64_t 
     return lean_io_result_mk_ok(lean_box(!c.arr || is_null(c.arr, c.lr) ? 1 : 0));
 }
 
-// forward decl
-static size_t cell_len_batch(struct ArrowArray* arr, const char* fmt, int64_t lr);
-
-// | Get string length (uses get_cell, for lean_qr_col_widths)
-static size_t cell_str_len(QueryResult* qr, int64_t row, int64_t col) {
-    CellInfo c = get_cell(qr, row, col);
-    return c.arr ? cell_len_batch(c.arr, c.fmt, c.lr) : 0;
-}
-
-// | Get string length from batch/local_row (no find_batch overhead)
-static size_t cell_len_batch(struct ArrowArray* arr, const char* fmt, int64_t lr) {
-    if (is_null(arr, lr)) return 0;
-    char buf[CELL_BUF_SIZE];
-    if (fmt[0] == 'l') return snprintf(buf, sizeof(buf), "%ld", ((const int64_t*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 'i') return snprintf(buf, sizeof(buf), "%d", ((const int32_t*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 's') return snprintf(buf, sizeof(buf), "%d", ((const int16_t*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 'c') return snprintf(buf, sizeof(buf), "%d", ((const int8_t*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 'g') return snprintf(buf, sizeof(buf), "%g", ((const double*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 'f') return snprintf(buf, sizeof(buf), "%g", ((const float*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 'u' || fmt[0] == 'z') {
-        const int32_t* off = (const int32_t*)arr->buffers[1];
-        return off[arr->offset + lr + 1] - off[arr->offset + lr];
-    }
-    if (fmt[0] == 'U' || fmt[0] == 'Z') {
-        const int64_t* off = (const int64_t*)arr->buffers[1];
-        return off[arr->offset + lr + 1] - off[arr->offset + lr];
-    }
-    if (fmt[0] == 'b') return 5;   // "false" = 5 chars
-    if (fmt[0] == 'd') return 20;  // decimal: up to 20 digits
-    if (fmt[0] == 't' && fmt[1] == 's') return 19;  // "YYYY-MM-DD HH:MM:SS"
-    if (fmt[0] == 't' && fmt[1] == 't') return 8;   // "HH:MM:SS"
-    return 1;  // unknown type fallback
-}
-
-// | Format single cell from batch (no find_batch overhead)
+// | Format cell or compute length (buf=NULL for length only)
 //
 // Arrow buffer layout:
 //   buffers[0]: validity bitmap (1 bit per row, 0=null)
 //   buffers[1]: data (fixed-width) or offsets (variable-length)
 //   buffers[2]: data bytes (variable-length only: utf8, binary)
 //
-// Fixed-width (int, float, bool, timestamp):
-//   data[arr->offset + lr] gives the value directly
-//
-// Variable-length (utf8 'u', binary 'z'):
-//   offsets[idx] to offsets[idx+1] gives byte range in buffers[2]
-//
 // arr: column ArrowArray from batch
 // fmt: Arrow format string (l=int64, u=utf8, g=float64, etc.)
 // lr: local row index within batch
-// buf: output buffer
-// buflen: buffer size
+// buf: output buffer (NULL = length only mode)
+// buflen: buffer size (ignored if buf=NULL)
 // decimals: decimal places for floats
-// returns: length written
+// returns: length written/needed
 static size_t format_cell_batch(struct ArrowArray* arr, const char* fmt, int64_t lr, char* buf, size_t buflen, uint8_t decimals) {
+    char tmp[CELL_BUF_SIZE];
+    if (!buf) { buf = tmp; buflen = sizeof(tmp); }  // length-only mode
     if (is_null(arr, lr)) { buf[0] = '\0'; return 0; }
 
     if (fmt[0] == 'l') {  // int64
@@ -584,9 +546,11 @@ lean_obj_res lean_qr_col_widths(b_lean_obj_arg qr_obj, lean_obj_arg world) {
         const char* name = qr->schema.children[c]->name;
         size_t w = name ? strlen(name) : 0;
 
-        // Scan all rows for max width
+        // Scan all rows for max width (default decimals=3)
         for (int64_t r = 0; r < nr; r++) {
-            size_t cw = cell_str_len(qr, r, c);
+            CellInfo ci = get_cell(qr, r, c);
+            if (!ci.arr) continue;
+            size_t cw = format_cell_batch(ci.arr, ci.fmt, ci.lr, NULL, 0, 3);
             if (cw > w) w = cw;
         }
 
@@ -635,7 +599,7 @@ static int64_t find_batch_start(QueryResult* qr, int64_t r0, int64_t* offset) {
 }
 
 // | Compute column width (header + visible rows, capped)
-static int col_width(QueryResult* qr, int64_t col, int64_t r0, int64_t r1, int maxW) {
+static int col_width(QueryResult* qr, int64_t col, int64_t r0, int64_t r1, int maxW, uint8_t decimals) {
     const char* name = qr->schema.children[col]->name;
     const char* fmt = qr->schema.children[col]->format;
     int w = name ? (int)strlen(name) : 0;
@@ -647,7 +611,7 @@ static int col_width(QueryResult* qr, int64_t col, int64_t r0, int64_t r1, int m
         int64_t lr0 = (r0 > batch_off) ? r0 - batch_off : 0;
         int64_t lr1 = (r1 < batch_off + batch->length) ? r1 - batch_off : batch->length;
         for (int64_t lr = lr0; lr < lr1; lr++) {
-            int cw = (int)cell_len_batch(arr, fmt, lr);
+            int cw = (int)format_cell_batch(arr, fmt, lr, NULL, 0, decimals);
             if (cw > w) w = cw;
             if (w >= maxW) return maxW;
         }
@@ -754,7 +718,7 @@ lean_obj_res lean_render_table(
         const char* fmt = qr->schema.children[idx]->format;
         int is_str = (fmt[0] == 'u' || fmt[0] == 'U' || fmt[0] == 'z' || fmt[0] == 'Z');
         int maxW = is_str ? maxWStr : maxWOther;
-        int w = col_width(qr, idx, r0, r1, maxW);
+        int w = col_width(qr, idx, r0, r1, maxW, decimals);
         // truncate width if partially visible
         if (x + w > screenW) w = screenW - x;
         ci[visCols].idx = idx;
