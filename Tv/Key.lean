@@ -247,9 +247,7 @@ def buildFilterExpr (col : String) (vals : Array String) (result : String) : Str
 -- | \ - filter with fzf
 def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
-  let (vals, s) ← match ← Backend.queryDistinct c.v.query.render col with
-    | .ok v => pure (v, s)
-    | .error e => pure (#[], s.setErr e)
+  let vals := (← Backend.queryDistinct c.v.query.render col).getD #[]
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
   (← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode)
     |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
@@ -264,15 +262,15 @@ def s (c : KeyCtx) (st : State) : KeyResult :=
 def M (c : KeyCtx) (s : State) : KeyResult :=
   Meta.queryMeta c.v.query.render c.v.path <&> fun
     | .ok t => runKey c (.M t) s
-    | .error e => s.setErr e
+    | .error _ => s  -- error already logged by Backend
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
 def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult := do
   let mkPath := fun name => let base := c.v.path.drop pfx.length
                             if base == "." then name else s!"{base}/{name}"
   match ← Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount with
-  | .error e => pure (s.setErr e)
-  | .ok vals =>
+  | none => pure s
+  | some vals =>
     match vals.getD Source.colPath .null |>.str?.filter (!·.isEmpty) with
     | none => pure s
     | some name =>

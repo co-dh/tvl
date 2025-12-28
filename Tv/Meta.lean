@@ -114,7 +114,7 @@ def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := 
           let st ← Backend.execSql metaSql
           return .ok st
       catch e =>
-        Backend.logError s!"queryMeta: {e}"
+        Backend.setErr s!"queryMeta: {e}"
         return .error s!"{e}"
 
 -- | Select rows where cell at column satisfies predicate

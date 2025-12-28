@@ -8,6 +8,27 @@ import Tv.Prql
 
 namespace Backend
 
+-- | Last error (for status bar display)
+initialize lastErr : IO.Ref String ← IO.mkRef ""
+
+-- | Get and clear last error
+def popErr : IO String := lastErr.modifyGet fun e => ("", e)
+
+-- | Set last error (logs + stores for status bar)
+def setErr (msg : String) : IO Unit := do
+  logError msg
+  lastErr.set msg
+where
+  logError (msg : String) : IO Unit := do
+    let ts ← timestamp
+    let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
+    h.putStrLn s!"[{ts}] [error] {msg}"
+  timestamp : IO String := do
+    let ms ← IO.monoMsNow
+    let s := ms / 1000 % 86400
+    let d2 := fun n : Nat => s!"{Char.ofNat (48 + n / 10)}{Char.ofNat (48 + n % 10)}"
+    pure s!"{s / 3600}:{d2 ((s % 3600) / 60)}:{d2 (s % 60)}.{ms % 1000}"
+
 -- | Init backend (ADBC + shellfs extension)
 def init : IO Bool := do
   let ok ← Adbc.init
@@ -22,28 +43,14 @@ def execSql (sql : String) : IO SomeTable := do
   let qr ← Adbc.query sql
   SomeTable.ofQueryResult qr
 
--- | Get timestamp as HH:MM:SS.mmm
-def timestamp : IO String := do
-  let ms ← IO.monoMsNow
-  let s := ms / 1000 % 86400  -- seconds in day
-  let h := s / 3600
-  let m := (s % 3600) / 60
-  let sec := s % 60
-  let milli := ms % 1000
-  let d2 := fun n : Nat => s!"{Char.ofNat (48 + n / 10)}{Char.ofNat (48 + n % 10)}"
-  pure s!"{h}:{d2 m}:{d2 sec}.{milli}"
-
 -- | Log to /tmp/tv.log
 def logPrql (prql : String) : IO Unit := do
-  let ts ← timestamp
+  let ms ← IO.monoMsNow
+  let s := ms / 1000 % 86400
+  let d2 := fun n : Nat => s!"{Char.ofNat (48 + n / 10)}{Char.ofNat (48 + n % 10)}"
+  let ts := s!"{s / 3600}:{d2 ((s % 3600) / 60)}:{d2 (s % 60)}.{ms % 1000}"
   let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
   h.putStrLn s!"[{ts}] [prql] {prql}"
-
--- | Log error to file (not stderr - silent is golden)
-def logError (msg : String) : IO Unit := do
-  let ts ← timestamp
-  let h ← IO.FS.Handle.mk "/tmp/tv.log" .append
-  h.putStrLn s!"[{ts}] [error] {msg}"
 
 -- | Check if string contains "take "
 def hasLimit (s : String) : Bool := (s.splitOn "take ").length > 1
@@ -87,28 +94,26 @@ def queryCount (prql : String) : IO (Except String Nat) := do
     else
       return .ok 0
 
--- | Get cell values for a specific row (for freq Enter filter)
-def queryRow (prql : String) (row : Nat) (ncols : Nat) : IO (Except String (Array Cell)) := do
+-- | Get cell values for a specific row (logs error, returns Option)
+def queryRow (prql : String) (row : Nat) (ncols : Nat) : IO (Option (Array Cell)) := do
   let rowPrql := prql ++ s!" | take {row + 1}"
   match ← query (mkLimited rowPrql (row + 1)) with
-  | .error e => return .error e
+  | .error e => setErr e; return none
   | .ok st =>
-    if st.nRows > row then
-      return .ok (Array.range ncols |>.map fun c => st.getIdx row c)
-    else
-      return .ok #[]
+    if st.nRows > row then return some (Array.range ncols |>.map fun c => st.getIdx row c)
+    else return some #[]
 
--- | Query all distinct values for a column (for fzf picker)
-def queryDistinct (prql : String) (col : String) : IO (Except String (Array String)) := do
+-- | Query distinct values for a column (logs error, returns Option)
+def queryDistinct (prql : String) (col : String) : IO (Option (Array String)) := do
   let distinctPrql := prql ++ " | select {" ++ col ++ "} | group {" ++ col ++ "} (take 1)"
   logPrql distinctPrql
   match ← Prql.compile distinctPrql with
-  | .error e => return .error e
+  | .error e => setErr e; return none
   | .ok sql =>
     try
       let st ← execSql sql
-      return .ok ((Array.range st.nRows).map fun r => toString (st.getIdx r 0))
+      return some ((Array.range st.nRows).map fun r => toString (st.getIdx r 0))
     catch e =>
-      return .error s!"SQL error: {e}"
+      setErr s!"SQL error: {e}"; return none
 
 end Backend
