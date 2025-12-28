@@ -94,7 +94,12 @@ def State.dupView (s : State) : State :=
 -- | Max rows to fetch (prevent OOM on huge files)
 def maxRows : Nat := 1000
 
--- | Fetch table for view (uses cache or queries backend). Returns error msg if any.
+-- | Fetch table for view. Returns (updated view, table, error).
+-- Uses Option monad via bindIO to chain: query → count → result
+--   1. Return cached table if available
+--   2. Query backend (returns Option SomeTable)
+--   3. bindIO: if Some st, compute total count, cache result, return Some tuple
+--   4. getD: if None (query failed), return empty table
 def View.fetch (v : View) : IO (View × SomeTable × String) := do
   if let some st := v.cache then return (v, st, "")
   let prql := v.query.render
