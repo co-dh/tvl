@@ -71,12 +71,20 @@ def sourceExpr (path : String) : String :=
   let colPart := colSpec src |>.map (s!", columns={·}") |>.getD ""
   s!"read_csv('{escSql cmd} |', delim='\\t', header={hasHeader}, null_padding=true{colPart})"
 
+-- | Type conversion SQL for ls/lr sources (size→int, datetime→timestamp)
+def lsCast : String :=
+  "permissions, CAST(links AS BIGINT) AS links, owner, grp, " ++
+  "CAST(size AS BIGINT) AS size, " ++
+  "strptime(datetime, '%Y-%m-%d_%H:%M') AS datetime, path"
+
 -- | Create temp table from source, return table name
 -- Executes shell command once, stores result in DuckDB temp table
 def createTmpTable (path : String) : IO String := do
   let tbl ← nextTmpName
   let expr := sourceExpr path
-  let sql := s!"CREATE OR REPLACE TEMP TABLE {tbl} AS SELECT * FROM {expr}"
+  let src := path.drop pfx.length
+  let cols := if src.startsWith "ls:" || src.startsWith "lr:" then lsCast else "*"
+  let sql := s!"CREATE OR REPLACE TEMP TABLE {tbl} AS SELECT {cols} FROM {expr}"
   let _ ← Adbc.query sql
   pure tbl
 

@@ -350,6 +350,13 @@ def test_lr_files : IO Unit := do
   let output ← runKeys "r" "tests/data/basic.csv"
   assert (contains output "datetime") s!"lr should show datetime column: {output}"
 
+-- | rM shows meta with correct types (size=int64, datetime=time)
+def test_lr_meta_types : IO Unit := do
+  let output ← runKeys "rM" "tests/data/basic.csv"
+  assert (contains output "size") s!"rM should show size column: {output}"
+  assert (contains output "int64") s!"size should be int64: {output}"
+  assert (contains output "time") s!"datetime should be timestamp (time): {output}"
+
 -- | M0<ret>llllll: select null cols as keys, navigate right, cursor should stay visible
 -- multi_null.csv has cols a,b,c,d,e where b,c,d are null
 -- After M0<ret>, keyCols=[1,2,3] (b,c,d), then l should navigate in display order
@@ -419,6 +426,7 @@ def main : IO Unit := do
   test_no_stderr
   test_ls_view
   test_lr_files
+  test_lr_meta_types
   test_multi_null_keycols_nav
 
   Backend.shutdown
