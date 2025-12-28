@@ -42,7 +42,7 @@ Reimplement tv (CSV/Parquet browser) in Lean 4 with:
 ┌─────────────────────────────────────────────────────┐
 │                   Backend.lean                       │
 │  Prql.lean → prqlc CLI → Adbc.lean (DuckDB FFI)     │
-│  Query { base, filters, sorts, derives, selects }   │
+│  Query { base, ops }  Error.lean (log + status bar) │
 └─────────────────────────────────────────────────────┘
        │
        ▼
@@ -76,6 +76,17 @@ Reimplement tv (CSV/Parquet browser) in Lean 4 with:
 3. **SQL → DuckDB → Arrow**: Adbc executes SQL, returns Arrow batches
 4. **Arrow → SomeTable**: Zero-copy access via FFI (no data duplication)
 5. **SomeTable → Render**: Display with keyCols first, cursor tracking
+
+### Error Handling
+
+All query functions return `Option` instead of `Except`:
+- `Prql.compile` → `IO (Option String)` - logs error via `Error.set`
+- `Backend.query` → `IO (Option SomeTable)` - early return on None
+- `Backend.queryRow/queryDistinct` → `IO (Option ...)` - same pattern
+
+Pattern: `let some x ← ioOption | return default`
+
+Errors logged to `/tmp/tv.log` and shown on status bar (red).
 
 ### Source Types
 
@@ -206,10 +217,11 @@ lean/
 ├── Tv/
 │   ├── Types.lean     # Cell, SomeTable, Query, PureKey
 │   ├── State.lean     # View, ViewKind, Nav, State
+│   ├── Error.lean     # centralized error: log to file, show on status bar
 │   ├── Term.lean      # termbox2 FFI bindings
 │   ├── Adbc.lean      # DuckDB ADBC FFI bindings
-│   ├── Backend.lean   # PRQL compile, query exec
-│   ├── Prql.lean      # type-safe PRQL builder
+│   ├── Backend.lean   # PRQL compile, query exec (returns Option)
+│   ├── Prql.lean      # type-safe PRQL builder (returns Option)
 │   ├── Source.lean    # system sources (ps,df,env,ls,lr)
 │   ├── Meta.lean      # meta view logic
 │   ├── Freq.lean      # freq view logic
