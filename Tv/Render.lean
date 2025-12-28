@@ -138,16 +138,15 @@ def tabLine (views : Array (String × String × String)) (y : UInt32) (screenW :
   Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (marked.join " | ")
 
 -- | Render status bar at bottom
-def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : Array String) (selCols : Array String) (selRows : Array Nat)
+def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : Array String) (selRows : Array Nat)
               (y : UInt32) (msg : String := "") (err : String := "") : IO Unit := do
-  -- left side: error (red), message, or key/sel columns/rows
+  -- left side: error (red), message, or key cols/sel rows
   let (left, fg) := if !err.isEmpty then (err.take (screenW - 20), Term.red)
     else if !msg.isEmpty then (msg, Term.cyan)
     else
       let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.size} "
-      let selStr := if selCols.isEmpty then "" else s!"sel={selCols.size} *{selCols.join ","}"
-      let rowStr := if selRows.isEmpty then "" else s!" rows={selRows.size}"
-      (s!"{keyStr}{selStr}{rowStr}", Term.cyan)
+      let rowStr := if selRows.isEmpty then "" else s!"rows={selRows.size}"
+      (s!"{keyStr}{rowStr}", Term.cyan)
   -- right side: col info + mem + row/total
   let mb ← memMB
   let right := s!"c{curCol}+{colOff} {mb}MB {curRow}/{fmtNum total}"

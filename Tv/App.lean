@@ -96,7 +96,7 @@ partial def loop (s : State) : IO Unit := do
   let views := s.views.map fun v => (v.path, v.disp, v.query.render)
   Render.tabLine views (h - 2) w.toNat
   Render.statusBar v'.nav.rowCur v'.nav.colCur.val v'.nav.colOff.val (v'.total.getD di.nRows) w.toNat
-                   v'.nav.keyCols v'.selCols v'.selRows (h - 1) s.msg s.err
+                   v'.nav.keyCols v'.selRows (h - 1) s.msg s.err
   if s.showInfo then Render.infoOverlay tbl 0 0 h.toNat w.toNat
   Term.present
   let newColOffset := off
