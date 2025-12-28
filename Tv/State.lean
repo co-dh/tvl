@@ -30,15 +30,10 @@ inductive ViewKind where
 -- | Default decimal places for float display
 def defDecimals : Nat := 3
 
--- | Source column indices (ls/lr share same schema)
-def srcColCount : Nat := 7
-def srcColPerms : Nat := 0
-def srcColPath  : Nat := 6
-
 -- | Single view with PRQL query
 structure View where
-  path     : String              -- file path
-  query    : Prql.Query := {}    -- PRQL query (type-safe)
+  path     : String              -- file path (for display/caching)
+  query    : Prql.Query := {}    -- PRQL query (base has from clause)
   disp     : String := ""        -- display name for tab
   nav      : PureState := {}     -- navigation state
   vkind    : ViewKind := .tbl
@@ -108,11 +103,11 @@ def View.fetch (v : View) : IO (View × SomeTable × String) := do
   | some st => return (v, st, "")
   | none =>
     let prql := v.query.render
-    match ← Backend.query (Backend.mkLimited prql maxRows) v.path with
+    match ← Backend.query (Backend.mkLimited prql maxRows) with
     | .ok st =>
       let total ← match v.total with
         | some n => pure n
-        | none => match ← Backend.queryCount prql v.path with
+        | none => match ← Backend.queryCount prql with
           | .ok n => pure n
           | .error _ => pure st.nRows
       return ({ v with cache := some st, total := some total }, st, "")

@@ -141,11 +141,6 @@ structure DisplayInfo where
   nRows     : Nat
   nCols     : Nat
 
--- | Source path prefixes
-def srcPfx : String := "source:"    -- base prefix
-def srcLs  : String := "source:ls:" -- ls command
-def srcLr  : String := "source:lr:" -- lr command
-
 -- | Zero-copy table: data stays in Arrow/C memory, accessed via FFI
 structure SomeTable where
   qr        : Adbc.QueryResult   -- arrow data (opaque, C memory)

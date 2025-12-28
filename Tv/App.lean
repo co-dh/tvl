@@ -52,7 +52,8 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
         return some { s.push fv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
-        let lrv : View := ⟨s!"source:lr:{dir}", {}, s!"lr {dir}", {}, .tbl, none, #[], #[], none, defDecimals⟩
+        let p := s!"{Source.lr}{dir}"
+        let lrv : View := ⟨p, { base := Source.fromExpr p }, s!"lr {dir}", {}, .tbl, none, #[], #[], none, defDecimals⟩
         return some { s.push lrv with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "filter " then
         let expr := cmd.drop 7 |>.trim
@@ -166,7 +167,7 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
   if r < 0 then
     Backend.logError "Failed to init terminal"
     return
-  let v : View := ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
+  let v : View := ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   let s : State := { curView := v, keys := keys.toList.toArray, testMode := testMode }
   loop s
   Backend.shutdown

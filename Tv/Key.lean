@@ -203,12 +203,12 @@ where
                let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
                let colStr := cols.join ","
                s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
-    | _, .r => s.push ⟨"source:lr:.", {}, "lr ./", {}, .fld, none, #[], #[], none, defDecimals⟩
+    | _, .r => let p := Source.lr ++ "."; s.push ⟨p, { base := Source.fromExpr p }, "lr ./", {}, .fld, none, #[], #[], none, defDecimals⟩
     | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
     | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
     | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
-    | _, .pushSource cmd => s.push ⟨s!"source:{cmd}", {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
-    | _, .pushFile path => s.push ⟨path, {}, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
+    | _, .pushSource cmd => let p := s!"{Source.pfx}{cmd}"; s.push ⟨p, { base := Source.fromExpr p }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
+    | _, .pushFile path => s.push ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
     | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
     | _, .colon => { s with inputMode := .command, inputBuf := "" }
     | _, .pushAgg keys funcs cols =>
@@ -217,12 +217,12 @@ where
         else s.setCur { c.v with selCols := #[] } |>.push ⟨c.v.path, c.v.query.agg keys aggs cols, "agg", {}, .tbl, none, #[], #[], none, defDecimals⟩
     -- ret: view-specific
     | .fld, .ret =>
-      let pfx := if c.v.path.startsWith srcLs then srcLs else srcLr
+      let pfx := if c.v.path.startsWith Source.ls then Source.ls else Source.lr
       c.row.bind (fun vals =>
-        vals.getD srcColPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
+        vals.getD Source.colPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
           let base := c.v.path.drop pfx.length
-          let path := if base == "." then name else s!"{base}/{name}"
-          s.push ⟨s!"source:ls:{path}", {}, s!"ls {name}", {}, .fld, none, #[], #[], none, defDecimals⟩
+          let p := s!"{Source.ls}{if base == "." then name else s!"{base}/{name}"}"
+          s.push ⟨p, { base := Source.fromExpr p }, s!"ls {name}", {}, .fld, none, #[], #[], none, defDecimals⟩
       ) |>.getD s
     | .freqV colNames, .ret =>
       let cols := colNames.splitOn "," |>.map String.trim |>.toArray
@@ -255,7 +255,7 @@ def buildFilterExpr (col : String) (vals : Array String) (result : String) : Str
 -- | \ - filter with fzf
 def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
-  let vals ← Backend.queryDistinct c.v.query.render c.v.path col |>.map (·.toOption.getD #[])
+  let vals ← Backend.queryDistinct c.v.query.render col |>.map (·.toOption.getD #[])
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
   (← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode)
     |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
@@ -274,24 +274,24 @@ def M (c : KeyCtx) (s : State) : KeyResult :=
 -- | ret on freqV: query row, call pure ret
 def retFreq (c : KeyCtx) (colNames : String) (s : State) : KeyResult :=
   let cols := colNames.splitOn "," |>.map String.trim |>.toArray
-  Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur cols.size
+  Backend.queryRow c.v.query.render c.v.nav.rowCur cols.size
     <&> fun r => r.toOption.map (fun v => runKey { c with row := some v } .ret s) |>.getD s
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
 def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
   let mkPath := fun name => let base := c.v.path.drop pfx.length
                             if base == "." then name else s!"{base}/{name}"
-  Backend.queryRow c.v.query.render c.v.path c.v.nav.rowCur srcColCount >>= fun r =>
+  Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount >>= fun r =>
     r.toOption.bind (fun vals =>
-      vals.getD srcColPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
-        let perms := vals.getD srcColPerms .null |>.str?.getD ""
+      vals.getD Source.colPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
+        let perms := vals.getD Source.colPerms .null |>.str?.getD ""
         if perms.startsWith "d" then pure (runKey { c with row := some vals } .ret s)
         else runBat (mkPath name) *> pure s
     ) |>.getD (pure s)
 
 -- | ret on folder (source:ls/lr)
 def retFld (c : KeyCtx) (s : State) : KeyResult :=
-  let pfx := if c.v.path.startsWith srcLs then srcLs else srcLr
+  let pfx := if c.v.path.startsWith Source.ls then Source.ls else Source.lr
   retSource c s pfx
 
 -- | Theorem: j increments rowCur (clamped to lastRow)

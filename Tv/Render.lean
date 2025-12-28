@@ -4,6 +4,7 @@
 import Tv.Types
 import Tv.State
 import Tv.Term
+import Tv.Source
 
 open App
 
@@ -275,25 +276,27 @@ def memMB : IO Nat := do
     return 0
   catch _ => return 0
 
--- | Shorten PRQL: "from df | freq {a} (df)" -> "freq a"
+-- | Shorten PRQL: "from `path` | freq {a}" -> "freq a"
 def shortenPrql (prql : String) : String :=
-  if prql == "from df" then ""
-  else if prql.startsWith "from df | " then
-    let rest := prql.drop 10  -- drop "from df | "
+  -- Find " | " separator between from clause and operations
+  match prql.splitOn " | " with
+  | [_] => ""  -- base query only, no operations
+  | _ :: rest =>
+    let ops := " | ".intercalate rest
     -- simplify common patterns
-    if rest.startsWith "freq {" then
-      let col := rest.drop 6 |>.takeWhile (· != '}')
+    if ops.startsWith "freq {" then
+      let col := ops.drop 6 |>.takeWhile (· != '}')
       s!"freq {col}"
-    else if rest.startsWith "filter " then
-      s!"filter {rest.drop 7}"
-    else if rest.startsWith "sort " then
-      s!"sort {rest.drop 5}"
-    else rest
-  else prql
+    else if ops.startsWith "filter " then
+      s!"filter {ops.drop 7}"
+    else if ops.startsWith "sort " then
+      s!"sort {ops.drop 5}"
+    else ops
+  | [] => ""
 
 -- | Shorten path for display (strip source: prefix)
 def shortenPath (p : String) : String :=
-  if p.startsWith srcPfx then p.drop srcPfx.length else p
+  if p.startsWith Source.pfx then p.drop Source.pfx.length else p
 
 -- | Render tab line: view1 | view2 | ... (all views on stack)
 def tabLine (views : Array (String × String × String)) (y : UInt32) (screenW : Nat) : IO Unit := do

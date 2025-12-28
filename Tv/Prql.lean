@@ -22,7 +22,7 @@ inductive Op where
 
 -- | PRQL query: base table + operations
 structure Query where
-  base : String := "from df"
+  base : String := "from df"  -- PRQL from clause (df = placeholder)
   ops  : Array Op := #[]
   deriving Inhabited
 

@@ -5,6 +5,7 @@ import Tv.Types
 import Tv.State
 import Tv.Backend
 import Tv.Prql
+import Tv.Source
 
 namespace App.Meta
 
@@ -64,25 +65,23 @@ def colStatsSql (colName colType : String) : String :=
 
 -- | Query column metadata (stats for all columns via SQL UNION)
 def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := do
-  -- Try cache for base queries on real files
-  let canCache := prql == "from df" && !Backend.isSource path
+  -- Try cache for base queries on real files (no pipe = base query)
+  let canCache := (prql.splitOn " | ").length == 1 && !Source.isSource path
   if canCache then
     if let some st ← loadCache path then
       Backend.logPrql s!"[meta] cached {cachePath path}"
       return .ok st
   -- Get schema first
   let schemaPrql := prql ++ " | take 1"
-  match ← Backend.query (Backend.mkLimited schemaPrql 1) path with
+  match ← Backend.query (Backend.mkLimited schemaPrql 1) with
   | .error e => return .error e
   | .ok schema =>
     let colNames := schema.colNames
     if colNames.isEmpty then return .ok (← SomeTable.empty)
     -- Get types from Arrow format
-    if Backend.isSource path then Backend.createSource path
     match ← Prql.compile schemaPrql with
     | .error e => return .error e
     | .ok sql =>
-      let sql := Backend.replaceDf sql (Backend.fileExpr path)
       try
         let qr ← Adbc.query sql
         let nc ← Adbc.ncols qr
@@ -99,7 +98,6 @@ def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := 
         match ← Prql.compile basePrql with
         | .error e => return .error e
         | .ok baseSql =>
-          let baseSql := Backend.replaceDf baseSql (Backend.fileExpr path)
           -- Normalize whitespace for parsing
           let baseSql := baseSql.replace "\n" " " |>.replace "  " " "
           -- Extract FROM clause (after "FROM ", before WHERE/ORDER/LIMIT)

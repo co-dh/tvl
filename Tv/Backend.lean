@@ -8,59 +8,11 @@ import Tv.Prql
 
 namespace Backend
 
--- | Generate table expression for file path or source
-def fileExpr (path : String) : String :=
-  if path.endsWith ".parquet" then s!"read_parquet('{path}')"
-  else if path.endsWith ".csv" || path.endsWith ".csv.gz" then s!"read_csv('{path}')"
-  else if path.endsWith ".json" then s!"read_json('{path}')"
-  else if path.startsWith srcPfx then "tv_source"
-  else s!"'{path}'"
-
--- | Check if path is a system source
-def isSource (path : String) : Bool := path.startsWith srcPfx
-
--- | Create source table in DuckDB
-def createSource (path : String) : IO Unit := do
-  let src := path.drop srcPfx.length
-  let (cmd, args, cols) := match src with
-    | "ls" => ("ls", #["-la", "--time-style=+%Y-%m-%d_%H:%M"], "permissions,links,owner,grp,size,datetime,name")
-    | "ps" => ("ps", #["aux"], "user,pid,cpu,mem,vsz,rss,tty,stat,start,time,command")
-    | "env" => ("env", #[], "name,value")
-    | "df" => ("df", #["-h"], "filesystem,size,used,avail,pct,mount")
-    | s => if s.startsWith "ls:" then ("ls", #["-la", "--time-style=+%Y-%m-%d_%H:%M", s.drop 3], "permissions,links,owner,grp,size,datetime,name")
-           else if s.startsWith "lr:" then ("find", #[s.drop 3, "-type", "f", "-printf", "%M\t%n\t%u\t%g\t%s\t%TY-%Tm-%Td_%TH:%TM\t%p\n"], "permissions,links,owner,grp,size,datetime,path")
-           else ("echo", #["unknown source"], "line")
-  let out ← IO.Process.output { cmd := cmd, args := args }
-  let hasHeader := cmd == "ls" || cmd == "ps" || cmd == "df"
-  let lines := out.stdout.splitOn "\n" |>.filter (!·.isEmpty) |> (if hasHeader then (·.drop 1) else id)
-  if lines.isEmpty then return ()
-  -- Build INSERT statements
-  let colArr := cols.splitOn "," |>.toArray
-  let mut vals : Array String := #[]
-  for line in lines do
-    -- try tab first (find -printf), fall back to space (ls, ps, df)
-    let parts := let ts := line.splitOn "\t"
-                 if ts.length > 1 then ts.toArray else line.splitOn " " |>.filter (!·.isEmpty) |>.toArray
-    let escaped := parts.map (fun s => "'" ++ s.replace "'" "''" ++ "'")
-    -- Pad or truncate to match column count
-    let padded := escaped ++ Array.replicate (colArr.size - escaped.size) "''"
-    vals := vals.push s!"({(padded.extract 0 colArr.size).join ", "})"
-  let createSql := s!"CREATE OR REPLACE TABLE tv_source ({(colArr.map (· ++ " VARCHAR")).join ", "})"
-  let _ ← Adbc.query createSql
-  if vals.size > 0 then
-    let insertSql := s!"INSERT INTO tv_source VALUES {vals.join ", "}"
-    let _ ← Adbc.query insertSql
-  return ()
-
--- | Replace "df" placeholder with actual table expression
-def replaceDf (sql : String) (tableExpr : String) : String :=
-  sql.replace "\"df\"" tableExpr
-     |>.replace " df " s!" {tableExpr} "
-     |>.replace " df\n" s!" {tableExpr}\n"
-     |>.replace "FROM df" s!"FROM {tableExpr}"
-
--- | Init backend
-def init : IO Bool := Adbc.init
+-- | Init backend (ADBC + shellfs extension)
+def init : IO Bool := do
+  let ok ← Adbc.init
+  if ok then let _ ← Adbc.query "LOAD shellfs"
+  pure ok
 
 -- | Shutdown backend
 def shutdown : IO Unit := Adbc.shutdown
@@ -101,14 +53,12 @@ structure LimitedQuery where
   prql : String
   proof : hasLimit prql = true
 
--- | Execute PRQL query on path (requires proof of limit)
-def query (q : LimitedQuery) (path : String) : IO (Except String SomeTable) := do
+-- | Execute PRQL query (requires proof of limit)
+def query (q : LimitedQuery) : IO (Except String SomeTable) := do
   logPrql q.prql
-  if isSource path then createSource path
   match ← Prql.compile q.prql with
   | .error e => return .error e
   | .ok sql =>
-    let sql := replaceDf sql (fileExpr path)
     try
       let st ← execSql sql
       return .ok st
@@ -125,9 +75,9 @@ def mkLimited (prql : String) (n : Nat) : LimitedQuery :=
 theorem mkLimited_example : hasLimit "from df | take 1000" = true := by native_decide
 
 -- | Get total row count for PRQL query
-def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
+def queryCount (prql : String) : IO (Except String Nat) := do
   let countPrql := prql ++ " | aggregate {n = std.count this}"
-  match ← query (mkLimited countPrql 1) path with
+  match ← query (mkLimited countPrql 1) with
   | .error e => return .error e
   | .ok st =>
     if st.nRows > 0 then
@@ -138,9 +88,9 @@ def queryCount (prql : String) (path : String) : IO (Except String Nat) := do
       return .ok 0
 
 -- | Get cell values for a specific row (for freq Enter filter)
-def queryRow (prql : String) (path : String) (row : Nat) (ncols : Nat) : IO (Except String (Array Cell)) := do
+def queryRow (prql : String) (row : Nat) (ncols : Nat) : IO (Except String (Array Cell)) := do
   let rowPrql := prql ++ s!" | take {row + 1}"
-  match ← query (mkLimited rowPrql (row + 1)) path with
+  match ← query (mkLimited rowPrql (row + 1)) with
   | .error e => return .error e
   | .ok st =>
     if st.nRows > row then
@@ -149,14 +99,12 @@ def queryRow (prql : String) (path : String) (row : Nat) (ncols : Nat) : IO (Exc
       return .ok #[]
 
 -- | Query all distinct values for a column (for fzf picker)
-def queryDistinct (prql : String) (path : String) (col : String) : IO (Except String (Array String)) := do
+def queryDistinct (prql : String) (col : String) : IO (Except String (Array String)) := do
   let distinctPrql := prql ++ " | select {" ++ col ++ "} | group {" ++ col ++ "} (take 1)"
   logPrql distinctPrql
-  if isSource path then createSource path
   match ← Prql.compile distinctPrql with
   | .error e => return .error e
   | .ok sql =>
-    let sql := replaceDf sql (fileExpr path)
     try
       let st ← execSql sql
       return .ok ((Array.range st.nRows).map fun r => toString (st.getIdx r 0))
