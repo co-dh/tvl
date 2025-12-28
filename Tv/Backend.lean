@@ -43,9 +43,9 @@ structure LimitedQuery where
 -- | Execute PRQL query (logs error, returns Option)
 def query (q : LimitedQuery) : IO (Option SomeTable) := do
   logPrql q.prql
-  Prql.compile q.prql >>= (·.bindIO fun sql =>
-    try pure (some (← execSql sql))
-    catch e => Error.set s!"SQL error: {e}"; pure none)
+  let some sql ← Prql.compile q.prql | return none
+  try return some (← execSql sql)
+  catch e => Error.set s!"SQL error: {e}"; return none
 
 -- | Create LimitedQuery by appending take
 def mkLimited (prql : String) (n : Nat) : LimitedQuery :=
@@ -77,8 +77,10 @@ def queryRow (prql : String) (row : Nat) (ncols : Nat) : IO (Option (Array Cell)
 def queryDistinct (prql : String) (col : String) : IO (Option (Array String)) := do
   let distinctPrql := prql ++ " | select {" ++ col ++ "} | group {" ++ col ++ "} (take 1)"
   logPrql distinctPrql
-  Prql.compile distinctPrql >>= (·.bindIO fun sql =>
-    try pure (some ((← execSql sql) |> fun st => (Array.range st.nRows).map fun r => toString (st.getIdx r 0)))
-    catch e => Error.set s!"SQL error: {e}"; pure none)
+  let some sql ← Prql.compile distinctPrql | return none
+  try
+    let st ← execSql sql
+    return some ((Array.range st.nRows).map fun r => toString (st.getIdx r 0))
+  catch e => Error.set s!"SQL error: {e}"; return none
 
 end Backend

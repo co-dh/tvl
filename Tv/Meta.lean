@@ -74,33 +74,33 @@ def queryMeta (prql : String) (path : String) : IO (Option SomeTable) := do
       return some st
   -- Get schema first
   let schemaPrql := prql ++ " | take 1"
-  Backend.query (Backend.mkLimited schemaPrql 1) >>= (·.bindIO fun schema => do
-    let colNames := schema.colNames
-    if colNames.isEmpty then return some (← SomeTable.empty)
-    -- Get types from Arrow format, build meta SQL, execute
-    Prql.compile schemaPrql >>= (·.bindIO fun sql => do
-      try
-        let qr ← Adbc.query sql
-        let nc ← Adbc.ncols qr
-        let mut types : Array String := #[]
-        for c in [:nc.toNat] do
-          let fmt ← Adbc.colFmt qr c.toUInt64
-          types := types.push (fmtToType (fmtChar fmt))
-        let unions := (Array.range colNames.size).map fun i =>
-          colStatsSql (colNames.getD i "") (types.getD i "?")
-        -- Compile base PRQL to get FROM clause
-        Prql.compile (prql ++ " | take 1") >>= (·.bindIO fun baseSql => do
-          let baseSql := baseSql.replace "\n" " " |>.replace "  " " "
-          let parts := baseSql.splitOn "FROM "
-          let rest := parts.getD 1 ""
-          let tbl := ((rest.splitOn " WHERE").head?.getD rest).splitOn " ORDER"
-                     |>.head?.getD rest |>.splitOn " LIMIT" |>.head?.getD rest
-          let metaSql := unions.map (· ++ " FROM " ++ tbl) |>.toList |> String.intercalate " UNION ALL "
-          Backend.logPrql s!"[meta] {metaSql}"
-          if canCache then saveCache path metaSql
-          pure (some (← Backend.execSql metaSql)))
-      catch e =>
-        Error.set s!"queryMeta: {e}"; pure none))
+  let some schema ← Backend.query (Backend.mkLimited schemaPrql 1) | return none
+  let colNames := schema.colNames
+  if colNames.isEmpty then return some (← SomeTable.empty)
+  -- Get types from Arrow format
+  let some sql ← Prql.compile schemaPrql | return none
+  try
+    let qr ← Adbc.query sql
+    let nc ← Adbc.ncols qr
+    let mut types : Array String := #[]
+    for c in [:nc.toNat] do
+      let fmt ← Adbc.colFmt qr c.toUInt64
+      types := types.push (fmtToType (fmtChar fmt))
+    let unions := (Array.range colNames.size).map fun i =>
+      colStatsSql (colNames.getD i "") (types.getD i "?")
+    -- Compile base PRQL to get FROM clause
+    let some baseSql ← Prql.compile (prql ++ " | take 1") | return none
+    let baseSql := baseSql.replace "\n" " " |>.replace "  " " "
+    let parts := baseSql.splitOn "FROM "
+    let rest := parts.getD 1 ""
+    let tbl := ((rest.splitOn " WHERE").head?.getD rest).splitOn " ORDER"
+               |>.head?.getD rest |>.splitOn " LIMIT" |>.head?.getD rest
+    let metaSql := unions.map (· ++ " FROM " ++ tbl) |>.toList |> String.intercalate " UNION ALL "
+    Backend.logPrql s!"[meta] {metaSql}"
+    if canCache then saveCache path metaSql
+    return some (← Backend.execSql metaSql)
+  catch e =>
+    Error.set s!"queryMeta: {e}"; return none
 
 -- | Select rows where cell at column satisfies predicate
 def selectRows (st : SomeTable) (col : Nat) (pred : Cell → Bool) : Array Nat :=

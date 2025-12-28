@@ -95,18 +95,15 @@ def State.dupView (s : State) : State :=
 def maxRows : Nat := 1000
 
 -- | Fetch table for view. Returns (updated view, table, error).
--- Uses Option monad via bindIO to chain: query → count → result
 --   1. Return cached table if available
---   2. Query backend (returns Option SomeTable)
---   3. bindIO: if Some st, compute total count, cache result, return Some tuple
---   4. getD: if None (query failed), return empty table
+--   2. Query backend, early return empty on failure
+--   3. Compute total count, cache result
 def View.fetch (v : View) : IO (View × SomeTable × String) := do
   if let some st := v.cache then return (v, st, "")
   let prql := v.query.render
-  let r ← Backend.query (Backend.mkLimited prql maxRows) >>= (·.bindIO fun st => do
-    let total ← v.total.map pure |>.getD ((← Backend.queryCount prql).getD st.nRows |> pure)
-    pure (some ({ v with cache := some st, total := some total }, st, "")))
-  r.map pure |>.getD (do return (v, ← SomeTable.empty, ""))
+  let some st ← Backend.query (Backend.mkLimited prql maxRows) | return (v, ← SomeTable.empty, "")
+  let total ← v.total.map pure |>.getD ((← Backend.queryCount prql).getD st.nRows |> pure)
+  return ({ v with cache := some st, total := some total }, st, "")
 
 -- | Invalidate cache (after PRQL change)
 def View.invalidate (v : View) : View := { v with cache := none }

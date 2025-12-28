@@ -2,10 +2,6 @@
   Centralized error handling: log to file, store for status bar, return Option
 -/
 
--- | Option.bind lifted to IO (for chaining IO (Option a) → (a → IO (Option b)))
-def Option.bindIO (o : Option a) (f : a → IO (Option b)) : IO (Option b) :=
-  o.map f |>.getD (pure none)
-
 namespace Error
 
 -- | Last error (for status bar display)
