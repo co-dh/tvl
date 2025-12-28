@@ -203,7 +203,6 @@ where
                let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
                let colStr := cols.join ","
                s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
-    | _, .r => let p := Source.lr ++ "."; s.push ⟨p, { base := Source.fromExpr p }, "lr ./", {}, .fld, none, #[], #[], none, defDecimals⟩
     | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
     | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
     | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
@@ -336,9 +335,10 @@ def b (c : KeyCtx) (s : State) : KeyResult := do
     pure (if funcs.isEmpty then s else runKey c (.pushAgg keyNames funcs aggNames) s)
 
 -- | : - command mode (fzf select source)
-def colon (c : KeyCtx) (s : State) : KeyResult :=
-  fzf #["--prompt=: "] "ps\nenv\ndf\nls\ntcp" s.testMode
-    <&> (·.map (fun cmd => runKey c (.pushSource cmd) s) |>.getD s)
+def colon (_c : KeyCtx) (s : State) : KeyResult :=
+  fzf #["--prompt=: "] "ps\nenv\ndf\nls\ntcp" s.testMode >>= fun
+    | some cmd => Source.pushView cmd "" .tbl s
+    | none => pure s
 
 -- | ^ - rename column
 def caret (c : KeyCtx) (s : State) : KeyResult :=
