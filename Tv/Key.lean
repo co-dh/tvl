@@ -225,6 +225,17 @@ where
     | .freqV cols, .ret => Freq.runKey c.v s cols c.row .ret |>.getD s
     | _, .ret => s
 
+-- | Consume keys until delimiter char (for testMode fzf simulation)
+-- Returns (consumed string without delim, remaining keys)
+def consumeUntil (keys : Array Char) (delim : Char) : String × Array Char :=
+  let rec go (i : Nat) (acc : String) : String × Array Char :=
+    if h : i < keys.size then
+      let c := keys[i]
+      if c == delim then (acc, keys.extract (i + 1) keys.size)
+      else go (i + 1) (acc.push c)
+    else (acc, #[])
+  go 0 ""
+
 namespace Key
 
 -- | @ - column jump with fzf
@@ -237,24 +248,54 @@ def atSign (c : KeyCtx) (s : State) : KeyResult :=
   fzfIdx #["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames) s.testMode
     <&> (·.map (fun i => runKey c (.colJump i) s) |>.getD s)
 
+-- | Check if string is numeric (digits, optional leading minus, optional decimal)
+def isNumeric (s : String) : Bool :=
+  if s.isEmpty then false
+  else
+    let s := if s.startsWith "-" then s.drop 1 else s
+    let parts := s.splitOn "."
+    match parts with
+    | [int] => int.all Char.isDigit && !int.isEmpty
+    | [int, dec] => int.all Char.isDigit && dec.all Char.isDigit && !int.isEmpty
+    | _ => false
+
+-- | Quote value for PRQL: numeric values unquoted, strings quoted
+def quoteVal (v : String) : String :=
+  if isNumeric v then v else s!"'{v}'"
+
 -- | Build filter expression from fzf result
+-- If selection is from vals (options), generate col == val (quoted if string)
+-- Otherwise use input as custom PRQL filter expression
 def buildFilterExpr (col : String) (vals : Array String) (result : String) : String :=
   let lines := result.splitOn "\n" |>.filter (!·.isEmpty) |>.toArray
   let input := lines.getD 0 ""
+  -- lines[1:] are explicit selections; line[0] may also be selection if in vals (and not duplicate)
   let fromHints := (lines.extract 1 lines.size).filter vals.contains
-  if fromHints.size == 1 then s!"{col} == '{fromHints.getD 0 ""}'"
-  else if fromHints.size > 1 then "(" ++ (fromHints.map fun v => s!"{col} == '{v}'").join " || " ++ ")"
+  let selected := if vals.contains input && !fromHints.contains input
+                  then #[input] ++ fromHints else fromHints
+  if selected.size == 1 then s!"{col} == {quoteVal (selected.getD 0 "")}"
+  else if selected.size > 1 then "(" ++ (selected.map fun v => s!"{col} == {quoteVal v}").join " || " ++ ")"
   else if !input.isEmpty then
     if input.startsWith ">" || input.startsWith "<" || input.startsWith "=" || input.startsWith "~"
     then s!"{col} {input}" else input
   else ""
 
 -- | \ - filter with fzf
+-- testMode: consume keys until <ret> as query, simulate fzf --print-query output
 def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
   let vals := (← Backend.queryDistinct c.v.query.render col).getD #[]
+  if s.testMode then
+    -- consume keys until '\r' (<ret>) as query
+    let (query, keys') := consumeUntil s.keys '\r'
+    -- simulate fzf --print-query: query\nselection (if query in vals)
+    let result := if vals.contains query then s!"{query}\n{query}" else query
+    let expr := buildFilterExpr col vals result
+    if expr.isEmpty then return { s with keys := keys' }
+    return runKey c (.backslash expr) { s with keys := keys' }
+  -- normal mode: spawn fzf
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
-  let some result ← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode | return s
+  let some result ← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") false | return s
   let expr := buildFilterExpr col vals result
   if expr.isEmpty then return s
   return runKey c (.backslash expr) s

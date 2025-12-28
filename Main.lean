@@ -10,6 +10,7 @@ def parseKeys (s : String) : String :=
    |>.replace "<esc>" "\x1b"
    |>.replace "<C-d>" "\x04"
    |>.replace "<C-u>" "\x15"
+   |>.replace "<backslash>" "\\"
 
 -- | Parse args: (path, keys, testMode)
 def parseArgs : List String → Option (String × String × Bool)

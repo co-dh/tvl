@@ -84,6 +84,14 @@ def toString : Cell → String
   | .str s   => s
   | .bool b  => if b then "true" else "false"
 
+-- | Raw string value (no formatting, for PRQL filters)
+def toRaw : Cell → String
+  | .null    => ""
+  | .int n   => s!"{n}"
+  | .float f => s!"{f}"
+  | .str s   => s
+  | .bool b  => if b then "true" else "false"
+
 -- | Format cell with decimal precision
 def toStringD (c : Cell) (decimals : Nat) : String :=
   match c with

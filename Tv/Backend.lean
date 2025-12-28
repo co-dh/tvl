@@ -74,13 +74,14 @@ def queryRow (prql : String) (row : Nat) (ncols : Nat) : IO (Option (Array Cell)
     else #[]
 
 -- | Query distinct values for a column (logs error, returns Option)
+-- Uses Cell.toRaw for raw values (no comma formatting in numbers)
 def queryDistinct (prql : String) (col : String) : IO (Option (Array String)) := do
   let distinctPrql := prql ++ " | select {" ++ col ++ "} | group {" ++ col ++ "} (take 1)"
   logPrql distinctPrql
   let some sql ← Prql.compile distinctPrql | return none
   try
     let st ← execSql sql
-    return some ((Array.range st.nRows).map fun r => toString (st.getIdx r 0))
+    return some ((Array.range st.nRows).map fun r => (st.getIdx r 0).toRaw)
   catch e => Error.set s!"SQL error: {e}"; return none
 
 end Backend

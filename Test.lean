@@ -416,6 +416,24 @@ def test_multi_null_keycols_nav : IO Unit := do
   -- After M0<ret>llllll, cursor should be visible (status shows col info)
   assert (contains status "c") s!"Status should show cursor col: {status}"
 
+-- | \ filter: select value from options should generate col == 'val'
+-- basic.csv col b has x,y,x,z,x - type 'x' then <ret> to select
+def test_backslash_filter : IO Unit := do
+  let output ← runKeys "l<backslash>x<ret>" "tests/data/basic.csv"  -- l to col b, \x<ret> to filter by x
+  let (tab, status) := footer output
+  -- \x<ret>: x matches distinct value, should generate: b == 'x'
+  assert (contains tab "b == 'x'") s!"tab should show \"b == 'x'\": {tab}"
+  assert (endsWith status "/3") s!"filter should show 3 rows (x appears 3 times): {status}"
+
+-- | \ filter on numeric column should NOT format with commas
+-- large_nums.csv col a has 1000,2000,3000 - should filter as == 1000, not == '1,000'
+def test_backslash_filter_numeric : IO Unit := do
+  let output ← runKeys "<backslash>1000<ret>" "tests/data/large_nums.csv"  -- \1000<ret> to filter
+  let (tab, status) := footer output
+  -- Should generate: a == 1000 (no quotes, no commas)
+  assert (contains tab "a == 1000") s!"numeric filter should be 'a == 1000' (no commas): {tab}"
+  assert (endsWith status "/1") s!"filter should show 1 row: {status}"
+
 -- === Run all tests ===
 
 def main : IO Unit := do
@@ -483,6 +501,8 @@ def main : IO Unit := do
   test_ls_view
   test_ls_columns
   test_multi_null_keycols_nav
+  test_backslash_filter
+  test_backslash_filter_numeric
 
   Backend.shutdown
   IO.println "\nAll tests passed!"
