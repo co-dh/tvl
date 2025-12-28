@@ -247,7 +247,9 @@ def buildFilterExpr (col : String) (vals : Array String) (result : String) : Str
 -- | \ - filter with fzf
 def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
-  let vals ← Backend.queryDistinct c.v.query.render col |>.map (·.toOption.getD #[])
+  let (vals, s) ← match ← Backend.queryDistinct c.v.query.render col with
+    | .ok v => pure (v, s)
+    | .error e => pure (#[], s.setErr e)
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
   (← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode)
     |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
@@ -259,26 +261,24 @@ def s (c : KeyCtx) (st : State) : KeyResult :=
     <&> fun cols => runKey c (.s cols) st
 
 -- | M - meta view (works on any view)
--- queryMeta returns IO (Except String SomeTable)
--- <&>         : Functor.map flipped, applies fn to value inside IO
--- r.toOption  : Except→Option, discards error string on .error
--- .map        : Option.map, applies fn to Some value, None passes through
--- |>.getD s   : Option.getD, unwrap Some or return default state s
 def M (c : KeyCtx) (s : State) : KeyResult :=
-  Meta.queryMeta c.v.query.render c.v.path
-    <&> fun r => r.toOption.map (fun t => runKey c (.M t) s) |>.getD s
+  Meta.queryMeta c.v.query.render c.v.path <&> fun
+    | .ok t => runKey c (.M t) s
+    | .error e => s.setErr e
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
-def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
+def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult := do
   let mkPath := fun name => let base := c.v.path.drop pfx.length
                             if base == "." then name else s!"{base}/{name}"
-  Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount >>= fun r =>
-    r.toOption.bind (fun vals =>
-      vals.getD Source.colPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
-        let perms := vals.getD Source.colPerms .null |>.str?.getD ""
-        if perms.startsWith "d" then pure (runKey { c with row := some vals } .ret s)
-        else runBat (mkPath name) *> pure s
-    ) |>.getD (pure s)
+  match ← Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount with
+  | .error e => pure (s.setErr e)
+  | .ok vals =>
+    match vals.getD Source.colPath .null |>.str?.filter (!·.isEmpty) with
+    | none => pure s
+    | some name =>
+      let perms := vals.getD Source.colPerms .null |>.str?.getD ""
+      if perms.startsWith "d" then pure (runKey { c with row := some vals } .ret s)
+      else runBat (mkPath name) *> pure s
 
 -- | ret on folder (source:ls/lr)
 def retFld (c : KeyCtx) (s : State) : KeyResult :=

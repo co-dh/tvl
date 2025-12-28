@@ -71,6 +71,9 @@ def State.views (s : State) : Array View := #[s.curView] ++ s.parents
 -- | Update current view
 def State.setCur (s : State) (v : View) : State := { s with curView := v }
 
+-- | Set error message (shown in red on status bar)
+def State.setErr (s : State) (e : String) : State := { s with err := e }
+
 -- | Push new view (current becomes parent)
 def State.push (s : State) (v : View) : State :=
   { s with curView := v, parents := #[s.curView] ++ s.parents }
