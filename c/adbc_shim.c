@@ -13,13 +13,7 @@
 #include <termbox2.h>
 
 /* === Constants === */
-#define USEC_PER_SEC    1000000   // microseconds per second
-#define SEC_PER_MIN     60
-#define MIN_PER_HOUR    60
-#define SEC_PER_HOUR    3600
-#define HOURS_PER_DAY   24
-#define TM_YEAR_BASE    1900      // struct tm year offset
-#define CELL_BUF_SIZE   64        // buffer for formatted cell values
+#define CELL_BUF_SIZE 64
 
 /* === ADBC Structures (from Arrow ADBC spec) === */
 
@@ -113,17 +107,26 @@ typedef AdbcStatusCode (*PFN_AdbcStatementSetSqlQuery)(struct AdbcStatement*, co
 typedef AdbcStatusCode (*PFN_AdbcStatementExecuteQuery)(struct AdbcStatement*, struct ArrowArrayStream*, int64_t*, struct AdbcError*);
 typedef AdbcStatusCode (*PFN_AdbcStatementRelease)(struct AdbcStatement*, struct AdbcError*);
 
-static PFN_AdbcDatabaseNew pAdbcDatabaseNew;
-static PFN_AdbcDatabaseSetOption pAdbcDatabaseSetOption;
-static PFN_AdbcDatabaseInit pAdbcDatabaseInit;
-static PFN_AdbcDatabaseRelease pAdbcDatabaseRelease;
-static PFN_AdbcConnectionNew pAdbcConnectionNew;
-static PFN_AdbcConnectionInit pAdbcConnectionInit;
-static PFN_AdbcConnectionRelease pAdbcConnectionRelease;
-static PFN_AdbcStatementNew pAdbcStatementNew;
-static PFN_AdbcStatementSetSqlQuery pAdbcStatementSetSqlQuery;
-static PFN_AdbcStatementExecuteQuery pAdbcStatementExecuteQuery;
-static PFN_AdbcStatementRelease pAdbcStatementRelease;
+// | ADBC function pointers (indexed by enum)
+enum { FN_DB_NEW, FN_DB_OPT, FN_DB_INIT, FN_DB_REL, FN_CONN_NEW, FN_CONN_INIT,
+       FN_CONN_REL, FN_STMT_NEW, FN_STMT_SQL, FN_STMT_EXEC, FN_STMT_REL, FN_COUNT };
+static void* g_fn[FN_COUNT];
+static const char* g_fn_names[] = {
+    "AdbcDatabaseNew", "AdbcDatabaseSetOption", "AdbcDatabaseInit", "AdbcDatabaseRelease",
+    "AdbcConnectionNew", "AdbcConnectionInit", "AdbcConnectionRelease",
+    "AdbcStatementNew", "AdbcStatementSetSqlQuery", "AdbcStatementExecuteQuery", "AdbcStatementRelease"
+};
+#define pAdbcDatabaseNew       ((PFN_AdbcDatabaseNew)g_fn[FN_DB_NEW])
+#define pAdbcDatabaseSetOption ((PFN_AdbcDatabaseSetOption)g_fn[FN_DB_OPT])
+#define pAdbcDatabaseInit      ((PFN_AdbcDatabaseInit)g_fn[FN_DB_INIT])
+#define pAdbcDatabaseRelease   ((PFN_AdbcDatabaseRelease)g_fn[FN_DB_REL])
+#define pAdbcConnectionNew     ((PFN_AdbcConnectionNew)g_fn[FN_CONN_NEW])
+#define pAdbcConnectionInit    ((PFN_AdbcConnectionInit)g_fn[FN_CONN_INIT])
+#define pAdbcConnectionRelease ((PFN_AdbcConnectionRelease)g_fn[FN_CONN_REL])
+#define pAdbcStatementNew      ((PFN_AdbcStatementNew)g_fn[FN_STMT_NEW])
+#define pAdbcStatementSetSqlQuery   ((PFN_AdbcStatementSetSqlQuery)g_fn[FN_STMT_SQL])
+#define pAdbcStatementExecuteQuery  ((PFN_AdbcStatementExecuteQuery)g_fn[FN_STMT_EXEC])
+#define pAdbcStatementRelease  ((PFN_AdbcStatementRelease)g_fn[FN_STMT_REL])
 
 /* === Global State === */
 
@@ -164,32 +167,14 @@ static int load_adbc_funcs(void) {
     const char* paths[] = {"/usr/lib/libduckdb.so", "/usr/local/lib/libduckdb.so", "libduckdb.so", NULL};
     for (int i = 0; paths[i]; i++) {
         g_lib = dlopen(paths[i], RTLD_NOW | RTLD_GLOBAL);
-        if (g_lib) {
-            log_msg("[adbc] loaded %s\n", paths[i]);
-            break;
-        }
+        if (g_lib) { log_msg("[adbc] loaded %s\n", paths[i]); break; }
     }
-    if (!g_lib) {
-        log_msg("[adbc] dlopen failed: %s\n", dlerror());
-        return 0;
+    if (!g_lib) { log_msg("[adbc] dlopen failed: %s\n", dlerror()); return 0; }
+    for (int i = 0; i < FN_COUNT; i++) {
+        g_fn[i] = dlsym(g_lib, g_fn_names[i]);
+        if (!g_fn[i]) return 0;
     }
-
-    pAdbcDatabaseNew = (PFN_AdbcDatabaseNew)dlsym(g_lib, "AdbcDatabaseNew");
-    pAdbcDatabaseSetOption = (PFN_AdbcDatabaseSetOption)dlsym(g_lib, "AdbcDatabaseSetOption");
-    pAdbcDatabaseInit = (PFN_AdbcDatabaseInit)dlsym(g_lib, "AdbcDatabaseInit");
-    pAdbcDatabaseRelease = (PFN_AdbcDatabaseRelease)dlsym(g_lib, "AdbcDatabaseRelease");
-    pAdbcConnectionNew = (PFN_AdbcConnectionNew)dlsym(g_lib, "AdbcConnectionNew");
-    pAdbcConnectionInit = (PFN_AdbcConnectionInit)dlsym(g_lib, "AdbcConnectionInit");
-    pAdbcConnectionRelease = (PFN_AdbcConnectionRelease)dlsym(g_lib, "AdbcConnectionRelease");
-    pAdbcStatementNew = (PFN_AdbcStatementNew)dlsym(g_lib, "AdbcStatementNew");
-    pAdbcStatementSetSqlQuery = (PFN_AdbcStatementSetSqlQuery)dlsym(g_lib, "AdbcStatementSetSqlQuery");
-    pAdbcStatementExecuteQuery = (PFN_AdbcStatementExecuteQuery)dlsym(g_lib, "AdbcStatementExecuteQuery");
-    pAdbcStatementRelease = (PFN_AdbcStatementRelease)dlsym(g_lib, "AdbcStatementRelease");
-
-    return pAdbcDatabaseNew && pAdbcDatabaseSetOption && pAdbcDatabaseInit &&
-           pAdbcDatabaseRelease && pAdbcConnectionNew && pAdbcConnectionInit &&
-           pAdbcConnectionRelease && pAdbcStatementNew && pAdbcStatementSetSqlQuery &&
-           pAdbcStatementExecuteQuery && pAdbcStatementRelease;
+    return 1;
 }
 
 // | Check ADBC call, log and goto fail on error
@@ -260,6 +245,7 @@ lean_obj_res lean_adbc_shutdown(lean_obj_arg world) {
 typedef struct {
     struct ArrowSchema schema;
     struct ArrowArray* batches;
+    int64_t* prefix;      // prefix[i] = sum of rows in batches[0..i-1], prefix[n_batches] = total
     int64_t n_batches;
     int64_t total_rows;
 } QueryResult;
@@ -272,6 +258,7 @@ static void qr_finalize(void* p) {
         if (qr->batches[i].release) qr->batches[i].release(&qr->batches[i]);
     }
     free(qr->batches);
+    free(qr->prefix);
     free(qr);
 }
 
@@ -313,12 +300,19 @@ lean_obj_res lean_adbc_query(b_lean_obj_arg sql_obj, lean_obj_arg world) {
     // collect batches
     int64_t cap = 16;
     qr->batches = malloc(cap * sizeof(struct ArrowArray));
+    qr->prefix = malloc((cap + 1) * sizeof(int64_t));
+    qr->prefix[0] = 0;
     while (1) {
         struct ArrowArray batch = {0};
         if (stream.get_next(&stream, &batch) != 0 || !batch.release) break;
-        if (qr->n_batches >= cap) { cap *= 2; qr->batches = realloc(qr->batches, cap * sizeof(struct ArrowArray)); }
-        qr->batches[qr->n_batches++] = batch;
+        if (qr->n_batches >= cap) {
+            cap *= 2;
+            qr->batches = realloc(qr->batches, cap * sizeof(struct ArrowArray));
+            qr->prefix = realloc(qr->prefix, (cap + 1) * sizeof(int64_t));
+        }
+        qr->batches[qr->n_batches] = batch;
         qr->total_rows += batch.length;
+        qr->prefix[++qr->n_batches] = qr->total_rows;
     }
 
     if (stream.release) stream.release(&stream);
@@ -327,7 +321,7 @@ lean_obj_res lean_adbc_query(b_lean_obj_arg sql_obj, lean_obj_arg world) {
     return lean_io_result_mk_ok(lean_alloc_external(get_qr_class(), qr));
 
 fail:
-    if (qr) { free(qr->batches); free(qr); }
+    if (qr) { free(qr->batches); free(qr->prefix); free(qr); }
     if (stream.release) stream.release(&stream);
     if (stmt.private_data) pAdbcStatementRelease(&stmt, &err);
     free_error(&err);
@@ -370,18 +364,19 @@ lean_obj_res lean_qr_col_fmt(b_lean_obj_arg qr_obj, uint64_t col, lean_obj_arg w
 
 /* === Cell Access Helpers === */
 
-// | Find batch and local row for global row index
+// | Find batch and local row for global row index (binary search on prefix sums)
 static int find_batch(QueryResult* qr, int64_t row, int64_t* batch_idx, int64_t* local_row) {
-    int64_t offset = 0;
-    for (int64_t i = 0; i < qr->n_batches; i++) {
-        if (row < offset + qr->batches[i].length) {
-            *batch_idx = i;
-            *local_row = row - offset;
-            return 1;
-        }
-        offset += qr->batches[i].length;
+    if (row < 0 || row >= qr->total_rows) return 0;
+    // binary search: find largest i where prefix[i] <= row
+    int64_t lo = 0, hi = qr->n_batches;
+    while (lo < hi) {
+        int64_t mid = lo + (hi - lo + 1) / 2;
+        if (qr->prefix[mid] <= row) lo = mid;
+        else hi = mid - 1;
     }
-    return 0;
+    *batch_idx = lo;
+    *local_row = row - qr->prefix[lo];
+    return 1;
 }
 
 // | Check if cell is null
@@ -560,17 +555,16 @@ static size_t format_cell_batch(struct ArrowArray* arr, const char* fmt, int64_t
         for (int i = 0; i < scale; i++) val /= 10.0;
         return snprintf(buf, buflen, "%.*f", scale, val);
     }
-    if (fmt[0] == 't' && fmt[1] == 's') {  // timestamp
+    if (fmt[0] == 't' && fmt[1] == 's') {  // timestamp (us since epoch)
         int64_t us = ((const int64_t*)arr->buffers[1])[arr->offset + lr];
-        time_t secs = us / USEC_PER_SEC;
+        time_t secs = us / 1000000;
         struct tm* tm = gmtime(&secs);
         return snprintf(buf, buflen, "%04d-%02d-%02d %02d:%02d:%02d",
-                 tm->tm_year + TM_YEAR_BASE, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
+                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
     }
-    if (fmt[0] == 't' && fmt[1] == 't') {  // time
-        int64_t us = ((const int64_t*)arr->buffers[1])[arr->offset + lr];
-        int64_t s = us / USEC_PER_SEC;
-        return snprintf(buf, buflen, "%02d:%02d:%02d", (int)((s/SEC_PER_HOUR)%HOURS_PER_DAY), (int)((s/SEC_PER_MIN)%MIN_PER_HOUR), (int)(s%SEC_PER_MIN));
+    if (fmt[0] == 't' && fmt[1] == 't') {  // time (us since midnight)
+        int64_t s = ((const int64_t*)arr->buffers[1])[arr->offset + lr] / 1000000;
+        return snprintf(buf, buflen, "%02d:%02d:%02d", (int)((s/3600)%24), (int)((s/60)%60), (int)(s%60));
     }
     buf[0] = '\0';
     return 0;
@@ -627,27 +621,26 @@ static void tb_print_pad(int x, int y, int w, uint32_t fg, uint32_t bg, const ch
 // | Check if column is numeric (right-align)
 static int is_num_fmt(char f) { return f == 'l' || f == 'i' || f == 's' || f == 'c' || f == 'g' || f == 'f' || f == 'd'; }
 
-// | Find first batch containing row r0, returns batch index
-// Sets *offset to row offset at start of that batch
+// | Find first batch containing row r0 (binary search), sets *offset to batch start
 static int64_t find_batch_start(QueryResult* qr, int64_t r0, int64_t* offset) {
-    *offset = 0;
-    for (int64_t i = 0; i < qr->n_batches; i++) {
-        if (r0 < *offset + qr->batches[i].length) return i;
-        *offset += qr->batches[i].length;
+    if (r0 >= qr->total_rows) { *offset = qr->total_rows; return qr->n_batches; }
+    int64_t lo = 0, hi = qr->n_batches;
+    while (lo < hi) {
+        int64_t mid = lo + (hi - lo + 1) / 2;
+        if (qr->prefix[mid] <= r0) lo = mid;
+        else hi = mid - 1;
     }
-    return qr->n_batches;
+    *offset = qr->prefix[lo];
+    return lo;
 }
 
 // | Compute column width (header + visible rows, capped)
-// Iterates batches directly to avoid find_batch overhead
 static int col_width(QueryResult* qr, int64_t col, int64_t r0, int64_t r1, int maxW) {
     const char* name = qr->schema.children[col]->name;
     const char* fmt = qr->schema.children[col]->format;
     int w = name ? (int)strlen(name) : 0;
-    // find starting batch
     int64_t batch_off;
     int64_t bi = find_batch_start(qr, r0, &batch_off);
-    // iterate batches
     for (; bi < qr->n_batches && batch_off < r1; bi++) {
         struct ArrowArray* batch = &qr->batches[bi];
         struct ArrowArray* arr = batch->children[col];
@@ -676,21 +669,29 @@ static int col_width(QueryResult* qr, int64_t col, int64_t r0, int64_t r1, int m
 // | Column layout info for rendering
 typedef struct { int64_t idx; int x, w; } ColInfo;
 
-// | Check if column index is in selection array
-static int is_col_selected(b_lean_obj_arg selColIdxs, size_t nSelCols, int64_t colIdx) {
+// | Build column selection bitset (max 256 cols)
+static void build_col_bitset(b_lean_obj_arg selColIdxs, size_t nSelCols, uint64_t* bits) {
+    bits[0] = bits[1] = bits[2] = bits[3] = 0;
     for (size_t i = 0; i < nSelCols; i++) {
-        if ((int64_t)lean_unbox(lean_array_get_core(selColIdxs, i)) == colIdx) return 1;
+        size_t c = lean_unbox(lean_array_get_core(selColIdxs, i));
+        if (c < 256) bits[c / 64] |= 1ULL << (c % 64);
     }
-    return 0;
 }
+#define IS_COL_SEL(bits, col) ((col) < 256 && ((bits)[(col)/64] & (1ULL << ((col)%64))))
 
-// | Check if row index is in selection array
-static int is_row_selected(b_lean_obj_arg selRows, size_t nSelRows, int64_t rowIdx) {
+// | Build row selection bitset for visible range [r0, r1)
+static uint64_t* build_row_bitset(b_lean_obj_arg selRows, size_t nSelRows, int64_t r0, int64_t r1) {
+    int64_t n = r1 - r0;
+    if (n <= 0) return NULL;
+    size_t nwords = (n + 63) / 64;
+    uint64_t* bits = calloc(nwords, sizeof(uint64_t));
     for (size_t i = 0; i < nSelRows; i++) {
-        if (lean_unbox(lean_array_get_core(selRows, i)) == (size_t)rowIdx) return 1;
+        int64_t r = (int64_t)lean_unbox(lean_array_get_core(selRows, i));
+        if (r >= r0 && r < r1) bits[(r - r0) / 64] |= 1ULL << ((r - r0) % 64);
     }
-    return 0;
+    return bits;
 }
+#define IS_ROW_SEL(bits, r, r0) ((bits) && ((bits)[((r)-(r0))/64] & (1ULL << (((r)-(r0))%64))))
 
 // | Determine cell style index based on cursor/selection state
 static int get_cell_style(int isCursor, int isSelRow, int isSel, int isCurRow, int isCurCol) {
@@ -703,28 +704,6 @@ static int get_cell_style(int isCursor, int isSelRow, int isSel, int isCurRow, i
     return STYLE_DEFAULT;
 }
 
-// | Extract variable-length string from Arrow array (caller must free)
-static char* extract_varlen_str(struct ArrowArray* arr, const char* fmt, int64_t lr) {
-    if (fmt[0] == 'u' || fmt[0] == 'z') {
-        const int32_t* off = (const int32_t*)arr->buffers[1];
-        const char* data = (const char*)arr->buffers[2];
-        int64_t idx = arr->offset + lr;
-        int32_t len = off[idx + 1] - off[idx];
-        char* s = malloc(len + 1);
-        memcpy(s, data + off[idx], len);
-        s[len] = '\0';
-        return s;
-    } else {  // U or Z (large strings)
-        const int64_t* off = (const int64_t*)arr->buffers[1];
-        const char* data = (const char*)arr->buffers[2];
-        int64_t idx = arr->offset + lr;
-        int64_t len = off[idx + 1] - off[idx];
-        char* s = malloc(len + 1);
-        memcpy(s, data + off[idx], len);
-        s[len] = '\0';
-        return s;
-    }
-}
 
 // | Render table batch-by-batch to terminal
 // colIdxs: Array Nat (column indices in display order, key cols first)
@@ -753,18 +732,16 @@ lean_obj_res lean_render_table(
     uint8_t decimals,
     lean_obj_arg world) {
 
-    log_msg("[render] entry\n");
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
-    log_msg("[render] got qr\n");
     size_t ncols = lean_array_size(colIdxs);
-    log_msg("[render] ncols=%zu nKeyCols=%lu colOff=%lu\n", ncols, (unsigned long)nKeyCols, (unsigned long)colOff);
     size_t nSelCols = lean_array_size(selColIdxs);
-    size_t nSelRows = lean_array_size(selRows);
-    size_t nStyles = lean_array_size(styles);
-    log_msg("[render] nSelCols=%zu nSelRows=%zu nStyles=%zu\n", nSelCols, nSelRows, nStyles);
     int screenW = tb_width();
-    log_msg("[render] screenW=%d\n", screenW);
     char buf[CELL_BUF_SIZE];
+
+    // precompute selection bitsets
+    uint64_t colBits[4];
+    build_col_bitset(selColIdxs, nSelCols, colBits);
+    uint64_t* rowBits = build_row_bitset(selRows, lean_array_size(selRows), r0, r1);
 
     // compute widths and x positions (start from colOff)
     size_t startCol = (colOff < ncols) ? colOff : ncols;
@@ -787,14 +764,11 @@ lean_obj_res lean_render_table(
         visCols++;
     }
 
-    // find separator position: after last visible key column
-    // account for colOff - if scrolled past key cols, no separator
+    // separator position: after last visible key column
     int sepX = 0;
     size_t visKeys = (colOff < nKeyCols) ? nKeyCols - colOff : 0;
     if (visKeys > visCols) visKeys = visCols;
     if (visKeys > 0) sepX = ci[visKeys - 1].x + ci[visKeys - 1].w;
-    log_msg("[render] sepX=%d nKeyCols=%lu colOff=%lu visKeys=%zu visCols=%zu\n",
-            sepX, (unsigned long)nKeyCols, (unsigned long)colOff, visKeys, visCols);
 
     // extract styles
     uint32_t stFg[NUM_STYLES], stBg[NUM_STYLES];
@@ -810,7 +784,7 @@ lean_obj_res lean_render_table(
         int64_t colIdx = ci[c].idx;
         const char* name = qr->schema.children[colIdx]->name;
         if (!name) name = "";
-        int isSel = is_col_selected(selColIdxs, nSelCols, colIdx);
+        int isSel = IS_COL_SEL(colBits, colIdx);
         int isCurCol = (colIdx == (int64_t)curCol);
         int si = isCurCol ? STYLE_CURSOR : (isSel ? STYLE_SEL_COL : STYLE_DEFAULT);
         uint32_t fg = stFg[si] | HEADER_ATTR;
@@ -827,21 +801,15 @@ lean_obj_res lean_render_table(
     // find starting batch for r0
     int64_t batch_offset;
     int64_t bi_start = find_batch_start(qr, (int64_t)r0, &batch_offset);
-    log_msg("[render] r0=%ld r1=%ld bi_start=%ld batch_offset=%ld visCols=%zu\n",
-            (long)r0, (long)r1, (long)bi_start, (long)batch_offset, visCols);
 
     // iterate only needed batches
     for (int64_t bi = bi_start; bi < qr->n_batches && batch_offset < (int64_t)r1; bi++) {
         struct ArrowArray* batch = &qr->batches[bi];
-        int64_t batch_len = batch->length;
-        int64_t batch_end = batch_offset + batch_len;
-        log_msg("[render] batch %ld: offset=%ld len=%ld end=%ld\n",
-                (long)bi, (long)batch_offset, (long)batch_len, (long)batch_end);
+        int64_t batch_end = batch_offset + batch->length;
 
         // local row range within batch
         int64_t lr0 = ((int64_t)r0 > batch_offset) ? (int64_t)r0 - batch_offset : 0;
-        int64_t lr1 = ((int64_t)r1 < batch_end) ? (int64_t)r1 - batch_offset : batch_len;
-        log_msg("[render] batch %ld: lr0=%ld lr1=%ld\n", (long)bi, (long)lr0, (long)lr1);
+        int64_t lr1 = ((int64_t)r1 < batch_end) ? (int64_t)r1 - batch_offset : batch->length;
 
         // for each visible column
         for (size_t c = 0; c < visCols; c++) {
@@ -852,34 +820,20 @@ lean_obj_res lean_render_table(
             struct ArrowArray* carr = batch->children[colIdx];
             const char* fmt = qr->schema.children[colIdx]->format;
             int is_num = is_num_fmt(fmt[0]);
-            int is_varlen = (fmt[0] == 'u' || fmt[0] == 'U' || fmt[0] == 'z' || fmt[0] == 'Z');
-            int isSel = is_col_selected(selColIdxs, nSelCols, colIdx);
+            int isSel = IS_COL_SEL(colBits, colIdx);
             int isCurCol = (colIdx == (int64_t)curCol);
 
             // render each row in batch
             for (int64_t lr = lr0; lr < lr1; lr++) {
                 int64_t rowIdx = batch_offset + lr;
                 int y = (int)(rowIdx - r0 + 1);  // +1 for header
-                int isSelRow = is_row_selected(selRows, nSelRows, rowIdx);
+                int isSelRow = IS_ROW_SEL(rowBits, rowIdx, r0);
                 int isCurRow = (rowIdx == (int64_t)curRow);
                 int si = get_cell_style(isCurRow && isCurCol, isSelRow, isSel, isCurRow, isCurCol);
                 uint32_t fg = stFg[si], bg = stBg[si];
 
-                // format cell
-                const char* cellStr;
-                char* dynStr = NULL;
-                if (is_null(carr, lr)) {
-                    cellStr = "";
-                } else if (is_varlen) {
-                    dynStr = extract_varlen_str(carr, fmt, lr);
-                    cellStr = dynStr;
-                } else {
-                    format_cell_batch(carr, fmt, lr, buf, sizeof(buf), decimals);
-                    cellStr = buf;
-                }
-
-                tb_print_pad(cx, y, cw, fg, bg, cellStr, is_num);
-                if (dynStr) free(dynStr);
+                format_cell_batch(carr, fmt, lr, buf, sizeof(buf), decimals);
+                tb_print_pad(cx, y, cw, fg, bg, buf, is_num);
 
                 // draw separator (once per row, on first column)
                 if (c == 0 && sepX > 0) {
@@ -889,8 +843,6 @@ lean_obj_res lean_render_table(
         }
         batch_offset = batch_end;
     }
-
-    log_msg("[render] done\n");
 
     // build return array: Array (Nat × Nat × Nat) = Array (Nat × (Nat × Nat))
     lean_object* result = lean_alloc_array(visCols, visCols);
@@ -905,5 +857,6 @@ lean_obj_res lean_render_table(
     }
 
     free(ci);
+    free(rowBits);
     return lean_io_result_mk_ok(result);
 }
