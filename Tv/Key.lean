@@ -228,6 +228,11 @@ where
 namespace Key
 
 -- | @ - column jump with fzf
+-- fzfIdx: IO (Option DispIdx)
+-- <&>: unwrap IO, pass Option to lambda
+-- ·: the Option DispIdx (· is placeholder syntax)
+-- .map f: Option.map, apply f inside Option → Option State
+-- .getD s: extract State, default to s if None
 def atSign (c : KeyCtx) (s : State) : KeyResult :=
   fzfIdx #["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames) s.testMode
     <&> (·.map (fun idx => runKey c (.colJump idx) s) |>.getD s)
