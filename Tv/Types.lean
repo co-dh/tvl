@@ -138,16 +138,16 @@ def ofQueryResult (qr : Adbc.QueryResult) : IO SomeTable := do
 
 -- | Get cell at (row, col) - pure interface via unsafeIO
 @[inline] unsafe def getIdxImpl (t : SomeTable) (row col : Nat) : Cell :=
+  let r := row.toUInt64
+  let c := col.toUInt64
   match unsafeIO (do
-    let isNull ← Adbc.cellIsNull t.qr row.toUInt64 col.toUInt64
-    if isNull then return Cell.null
-    let ch := t.colFmts.getD col '?'
-    match ch with
-    | 'l' | 'i' | 's' | 'c' => return Cell.int (← Adbc.cellInt t.qr row.toUInt64 col.toUInt64)
-    | 'g' | 'f' | 'd' => return Cell.float (← Adbc.cellFloat t.qr row.toUInt64 col.toUInt64)
-    | 'b' => return Cell.bool ((← Adbc.cellStr t.qr row.toUInt64 col.toUInt64) == "true")
-    | _ => return Cell.str (← Adbc.cellStr t.qr row.toUInt64 col.toUInt64)) with
-  | Except.ok c => c
+    if ← Adbc.cellIsNull t.qr r c then return Cell.null
+    match t.colFmts.getD col '?' with
+    | 'l' | 'i' | 's' | 'c' => return Cell.int (← Adbc.cellInt t.qr r c)
+    | 'g' | 'f' | 'd' => return Cell.float (← Adbc.cellFloat t.qr r c)
+    | 'b' => return Cell.bool ((← Adbc.cellStr t.qr r c) == "true")
+    | _ => return Cell.str (← Adbc.cellStr t.qr r c)) with
+  | Except.ok cell => cell
   | Except.error _ => Cell.null
 
 @[implemented_by getIdxImpl]

@@ -261,10 +261,10 @@ lake build
 
 ## Key Differences from Haskell
 
-| Aspect | Haskell + LH | Lean 4 |
-|--------|--------------|--------|
-| Proof syntax | `{-@ ... @-}` annotations | Part of type signature |
-| Proof terms | Erased, checked by z3 | First-class, `by omega` |
-| Vectors | `vector-sized` + singletons | Built-in `Vector` |
-| TUI | brick (high-level) | termbox2 (low-level) |
-| Ecosystem | Rich | Minimal |
+| Aspect       | Haskell + LH                | Lean 4                  |
+|--------      |--------------               |--------                 |
+| Proof syntax | `{-@ ... @-}` annotations   | Part of type signature  |
+| Proof terms  | Erased, checked by z3       | First-class, `by omega` |
+| Vectors      | `vector-sized` + singletons | Built-in `Vector`       |
+| TUI          | brick (high-level)          | termbox2 (low-level)    |
+| Ecosystem    | Rich                        | Minimal                 |
