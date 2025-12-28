@@ -264,15 +264,15 @@ def M (c : KeyCtx) (s : State) : KeyResult :=
     <&> (·.map (fun st => runKey c (.M st) s) |>.getD s)
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
-def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
+def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult := do
   let mkPath := fun name => let base := c.v.path.drop pfx.length
                             if base == "." then name else s!"{base}/{name}"
-  Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount >>= fun vals =>
-    vals.bind (fun vs => vs.getD Source.colPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
-      let perms := vs.getD Source.colPerms .null |>.str?.getD ""
-      if perms.startsWith "d" then pure (runKey { c with row := some vs } .ret s)
-      else runBat (mkPath name) *> pure s
-    ) |>.getD (pure s)
+  let vals ← Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount
+  vals.bind (fun vs => vs.getD Source.colPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
+    let perms := vs.getD Source.colPerms .null |>.str?.getD ""
+    if perms.startsWith "d" then pure (runKey { c with row := some vs } .ret s)
+    else runBat (mkPath name) *> pure s
+  ) |>.getD (pure s)
 
 -- | ret on folder (source:ls/lr)
 def retFld (c : KeyCtx) (s : State) : KeyResult :=
@@ -321,10 +321,9 @@ def b (c : KeyCtx) (s : State) : KeyResult := do
     pure (if funcs.isEmpty then s else runKey c (.pushAgg keyNames funcs aggNames) s)
 
 -- | : - command mode (fzf select source)
-def colon (_c : KeyCtx) (s : State) : KeyResult :=
-  fzf #["--prompt=: "] "ps\nenv\ndf\nls\ntcp" s.testMode >>= fun
-    | some cmd => Source.pushView cmd "" .tbl s
-    | none => pure s
+def colon (_c : KeyCtx) (s : State) : KeyResult := do
+  let some cmd ← fzf #["--prompt=: "] "ps\nenv\ndf\nls\ntcp" s.testMode | return s
+  Source.pushView cmd "" .tbl s
 
 -- | ^ - rename column
 def caret (c : KeyCtx) (s : State) : KeyResult :=
