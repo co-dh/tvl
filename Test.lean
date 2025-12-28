@@ -159,7 +159,7 @@ def test_navigation_down : IO Unit := do
 def test_space_selects_column : IO Unit := do
   let output ← runKeys " " "tests/data/basic.csv"
   let (_, status) := footer output
-  assert (contains status "*") s!"space should select column (show *): {status}"
+  assert (contains status "sel=1") s!"space should select column (show sel=1): {status}"
 
 -- === test_command.rs ===
 

@@ -84,23 +84,11 @@ partial def loop (s : State) : IO Unit := do
   -- fetch table (uses cache if available)
   let (v', tbl, fetchErr) ← v.fetch
   let s := { s.setCur v' with err := fetchErr }
-  -- extract display info (only way to get metadata for handleKey)
+  -- extract display info (for handleKey metadata)
   let di := tbl.info
-  -- render based on view kind (tbl only used here for rendering)
-  let w ← Term.width
-  let h ← Term.height
-  -- render table and overlays (h-3 for data, h-3 for header, h-2 for tab, h-1 for status)
-  -- convert selCols names to indices for render
-  let selColIdxs := v'.selCols.filterMap fun name => di.colNames.findIdx? (· == name)
-  let (off, cols, keyW) ← Render.table tbl v'.nav (h.toNat - 3) v'.decimals selColIdxs v'.selRows
-  let views := s.views.map fun v => (v.path, v.disp, v.query.render)
-  Render.tabLine views (h - 2) w.toNat
-  Render.statusBar v'.nav.rowCur v'.nav.colCur.val v'.nav.colOff.val (v'.total.getD di.nRows) w.toNat
-                   v'.nav.keyCols v'.selRows (h - 1) s.msg s.err
-  if s.showInfo then Render.infoOverlay tbl 0 0 h.toNat w.toNat
-  Term.present
-  let newColOffset := off
-  let v' := { v' with nav := { v'.nav with colOff := ⟨newColOffset⟩ } }
+  -- render and update colOff
+  let off ← Render.all v' s tbl di
+  let v' := { v' with nav := { v'.nav with colOff := ⟨off⟩ } }
   let s := s.setCur v'
   -- test mode: exit after keys consumed
   if s.testMode && s.keys.isEmpty then
@@ -117,6 +105,7 @@ partial def loop (s : State) : IO Unit := do
     let ev ← Term.pollEvent
     pure (ev, s)
   -- handleKey gets DisplayInfo only - no cell access possible
+  let w ← Term.width; let h ← Term.height
   let s' ← if ev.type == Term.eventKey then handleKey s di ev h.toNat w.toNat else pure s
   -- pop any errors to status bar
   let err ← Error.pop

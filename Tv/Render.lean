@@ -138,15 +138,16 @@ def tabLine (views : Array (String × String × String)) (y : UInt32) (screenW :
   Term.printPad 0 y screenW.toUInt32 Term.white Term.blue (marked.join " | ")
 
 -- | Render status bar at bottom
-def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : Array String) (selRows : Array Nat)
+def statusBar (curRow curCol colOff total screenW : Nat) (keyCols : Array String) (nSelCols : Nat) (selRows : Array Nat)
               (y : UInt32) (msg : String := "") (err : String := "") : IO Unit := do
-  -- left side: error (red), message, or key cols/sel rows
+  -- left side: error (red), message, or key cols/sel info
   let (left, fg) := if !err.isEmpty then (err.take (screenW - 20), Term.red)
     else if !msg.isEmpty then (msg, Term.cyan)
     else
       let keyStr := if keyCols.isEmpty then "" else s!"keys={keyCols.size} "
+      let selStr := if nSelCols == 0 then "" else s!"sel={nSelCols} "
       let rowStr := if selRows.isEmpty then "" else s!"rows={selRows.size}"
-      (s!"{keyStr}{rowStr}", Term.cyan)
+      (s!"{keyStr}{selStr}{rowStr}", Term.cyan)
   -- right side: col info + mem + row/total
   let mb ← memMB
   let right := s!"c{curCol}+{colOff} {mb}MB {curRow}/{fmtNum total}"
@@ -180,5 +181,18 @@ def infoOverlay (_ : SomeTable) (_ _ : Nat) (screenH screenW : Nat) : IO Unit :=
     let kpad := "".pushn ' ' (keyW - k.length) ++ k
     let dpad := d.take hintW ++ "".pushn ' ' (hintW - min d.length hintW)
     Term.print x0.toUInt32 (y0 + i).toUInt32 Term.black Term.yellow (kpad ++ " " ++ dpad)
+
+-- | Render full screen: table, tabs, status bar, overlays. Returns new colOff.
+def all (v : View) (s : State) (tbl : SomeTable) (di : DisplayInfo) : IO Nat := do
+  let w ← Term.width; let h ← Term.height
+  let selColIdxs := v.selCols.filterMap fun name => di.colNames.findIdx? (· == name)
+  let (off, _, _) ← table tbl v.nav (h.toNat - 3) v.decimals selColIdxs v.selRows
+  let views := s.views.map fun v => (v.path, v.disp, v.query.render)
+  tabLine views (h - 2) w.toNat
+  statusBar v.nav.rowCur v.nav.colCur.val v.nav.colOff.val (v.total.getD di.nRows) w.toNat
+            v.nav.keyCols v.selCols.size v.selRows (h - 1) s.msg s.err
+  if s.showInfo then infoOverlay tbl 0 0 h.toNat w.toNat
+  Term.present
+  return off
 
 end Render
