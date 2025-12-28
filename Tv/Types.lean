@@ -210,7 +210,7 @@ inductive PureKey where
   | F | pushFilter (expr : String) | selectCols (cols : Array String)
   | pushMeta (metaTbl : SomeTable) | pushFile (path : String)
   -- input modes
-  | inputRename | colon
+  | inputRename
   -- agg (funcs as strings: "count", "sum", "average", "min", "max", "stddev")
   | pushAgg (keys : Array String) (funcs : Array String) (cols : Array String)
   -- enter key

@@ -46,10 +46,7 @@ structure View where
 -- | Pending input for interactive commands
 inductive InputMode where
   | none                    -- normal mode
-  | selectCols              -- waiting for column names
   | renameTo                -- waiting for new column name
-  | filterExpr              -- waiting for filter expression
-  | command                 -- command mode
   deriving Inhabited
 
 -- | App state with non-empty view stack (curView always exists)

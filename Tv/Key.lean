@@ -209,7 +209,6 @@ where
     | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
     | _, .pushFile path => s.push ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
     | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
-    | _, .colon => { s with inputMode := .command, inputBuf := "" }
     | _, .pushAgg keys funcs cols =>
         let aggs := funcs.filterMap Prql.Agg.parse
         if aggs.isEmpty then s

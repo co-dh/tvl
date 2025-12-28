@@ -15,14 +15,6 @@ namespace App
 -- | Handle input modes (collecting chars until Enter)
 def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO (Option State) := do
   match s.inputMode with
-  | .selectCols =>
-    if ev.key == Term.keyEnter || ev.ch == 13 then
-      let cols := s.inputBuf.splitOn "," |>.map String.trim |>.filter (!·.isEmpty) |>.toArray
-      if cols.size > 0 then
-        return some { s.setCur (v.copy (query := v.query.select cols)) with inputMode := .none, inputBuf := "" }
-      else return some { s with inputMode := .none, inputBuf := "" }
-    else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
-    else return some s
   | .renameTo =>
     if ev.key == Term.keyEnter || ev.ch == 13 then
       let newName := s.inputBuf.trim
@@ -32,31 +24,6 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
         let query := v.query.derive1 newName (Prql.quote oldName) |>.select newCols
         return some { s.setCur (v.copy (query := query)) with inputMode := .none, inputBuf := "" }
       else return some { s with inputMode := .none, inputBuf := "" }
-    else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
-    else return some s
-  | .filterExpr =>
-    if ev.key == Term.keyEnter || ev.ch == 13 then
-      let expr := s.inputBuf.trim
-      if !expr.isEmpty then
-        return some { s.setCur { v.copy (query := v.query.filter expr) with nav := {} } with inputMode := .none, inputBuf := "" }
-      else return some { s with inputMode := .none, inputBuf := "" }
-    else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
-    else return some s
-  | .command =>
-    if ev.key == Term.keyEnter || ev.ch == 13 then
-      let cmd := s.inputBuf.trim
-      if cmd.startsWith "freq " then
-        let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim |>.toArray
-        return some { s.push (Freq.mkView v cols) with inputMode := .none, inputBuf := "" }
-      else if cmd.startsWith "lr " then
-        let dir := cmd.drop 3 |>.trim
-        let p := s!"{Source.lr}{dir}"
-        let lrv : View := ⟨p, { base := Source.fromExpr p }, s!"lr {dir}", {}, .tbl, none, #[], #[], none, defDecimals⟩
-        return some { s.push lrv with inputMode := .none, inputBuf := "" }
-      else if cmd.startsWith "filter " then
-        let expr := cmd.drop 7 |>.trim
-        return some { s.setCur { v.copy (query := v.query.filter expr) with nav := {} } with inputMode := .none, inputBuf := "" }
-      else return some { s with inputMode := .none, inputBuf := "", msg := s!"unknown: {cmd}" }
     else if ev.ch > 0 then return some { s with inputBuf := s.inputBuf.push (Char.ofNat ev.ch.toNat) }
     else return some s
   | .none => return none  -- not in input mode
