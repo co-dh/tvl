@@ -174,7 +174,7 @@ inductive PureKey where
   | bang | spc | incDec (inc : Bool) | q | esc
   -- views (push new view)
   | F | backslash (expr : String) | s (cols : Array String)
-  | pushMeta (metaTbl : SomeTable) | pushFile (path : String)
+  | M (metaTbl : SomeTable) | pushFile (path : String)
   -- input modes
   | inputRename
   -- agg (funcs as strings: "count", "sum", "average", "min", "max", "stddev")

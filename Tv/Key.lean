@@ -206,7 +206,7 @@ where
                s.push (Freq.mkView c.v cols)
     | _, .backslash expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
     | _, .s cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
-    | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
+    | _, .M metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
     | _, .pushFile path => s.push ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
     | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
     | _, .pushAgg keys funcs cols =>
@@ -261,7 +261,7 @@ def s (c : KeyCtx) (st : State) : KeyResult :=
 -- | M - meta view (works on any view)
 def M (c : KeyCtx) (s : State) : KeyResult :=
   Meta.queryMeta c.v.query.render c.v.path
-    <&> fun r => r.toOption.map (fun t => runKey c (.pushMeta t) s) |>.getD s
+    <&> fun r => r.toOption.map (fun t => runKey c (.M t) s) |>.getD s
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
 def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
