@@ -253,8 +253,8 @@ def test_freq_enter_pushes_view : IO Unit := do
 
 def test_decimal_increase : IO Unit := do
   let output ← runKeys "." "tests/data/floats.csv"
-  -- After '.', decimals goes from 3 to 4: 1.1234 (truncated, not rounded)
-  assert (contains output "1.1234") s!"Should show 4 decimals: {output}"
+  -- After '.', decimals goes from 3 to 4: 1.1235 (rounded)
+  assert (contains output "1.1235") s!"Should show 4 decimals: {output}"
 
 def test_decimal_decrease : IO Unit := do
   let output ← runKeys "," "tests/data/floats.csv"
