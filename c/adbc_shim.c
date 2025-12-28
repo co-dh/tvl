@@ -10,6 +10,16 @@
 #include <stdarg.h>
 #include <dlfcn.h>
 #include <time.h>
+#include <termbox2.h>
+
+/* === Constants === */
+#define USEC_PER_SEC    1000000   // microseconds per second
+#define SEC_PER_MIN     60
+#define MIN_PER_HOUR    60
+#define SEC_PER_HOUR    3600
+#define HOURS_PER_DAY   24
+#define TM_YEAR_BASE    1900      // struct tm year offset
+#define CELL_BUF_SIZE   64        // buffer for formatted cell values
 
 /* === ADBC Structures (from Arrow ADBC spec) === */
 
@@ -363,7 +373,7 @@ lean_obj_res lean_adbc_query(b_lean_obj_arg sql_obj, lean_obj_arg world) {
     }
 
     // Collect batches
-    int64_t cap = 16;
+    int64_t cap = 16;  // initial capacity, grows 2x as needed
     qr->batches = malloc(cap * sizeof(struct ArrowArray));
     qr->n_batches = 0;
     qr->total_rows = 0;
@@ -469,7 +479,7 @@ lean_obj_res lean_qr_cell_str(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col,
         return lean_io_result_mk_ok(lean_mk_string(""));
     }
 
-    char buf[64];
+    char buf[CELL_BUF_SIZE];
 
     // Dispatch on Arrow format
     if (fmt[0] == 'l') {  // int64
@@ -556,11 +566,10 @@ lean_obj_res lean_qr_cell_str(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col,
         const int64_t* data = (const int64_t*)arr->buffers[1];
         int64_t idx = arr->offset + lr;
         int64_t us = data[idx];
-        // Convert to seconds and format as ISO datetime
-        time_t secs = us / 1000000;
+        time_t secs = us / USEC_PER_SEC;
         struct tm* tm = gmtime(&secs);
         snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
-                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+                 tm->tm_year + TM_YEAR_BASE, tm->tm_mon + 1, tm->tm_mday,
                  tm->tm_hour, tm->tm_min, tm->tm_sec);
         return lean_io_result_mk_ok(lean_mk_string(buf));
     }
@@ -569,10 +578,10 @@ lean_obj_res lean_qr_cell_str(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col,
         const int64_t* data = (const int64_t*)arr->buffers[1];
         int64_t idx = arr->offset + lr;
         int64_t us = data[idx];
-        int64_t secs = us / 1000000;
-        int h = (secs / 3600) % 24;
-        int m = (secs / 60) % 60;
-        int s = secs % 60;
+        int64_t secs = us / USEC_PER_SEC;
+        int h = (secs / SEC_PER_HOUR) % HOURS_PER_DAY;
+        int m = (secs / SEC_PER_MIN) % MIN_PER_HOUR;
+        int s = secs % SEC_PER_MIN;
         snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
         return lean_io_result_mk_ok(lean_mk_string(buf));
     }
@@ -666,58 +675,142 @@ lean_obj_res lean_qr_cell_is_null(b_lean_obj_arg qr_obj, uint64_t row, uint64_t 
     return lean_io_result_mk_ok(lean_box(is_null(arr, lr) ? 1 : 0));
 }
 
-// | Get string length of cell (for width calculation, no allocation)
+// | Get string length (uses find_batch, for lean_qr_col_widths)
 static size_t cell_str_len(QueryResult* qr, int64_t row, int64_t col) {
     int64_t bi, lr;
     if (!find_batch(qr, row, &bi, &lr)) return 0;
     if (col >= qr->schema.n_children) return 0;
-
-    struct ArrowArray* batch = &qr->batches[bi];
-    struct ArrowArray* arr = batch->children[col];
+    struct ArrowArray* arr = qr->batches[bi].children[col];
     const char* fmt = qr->schema.children[col]->format;
-
     if (is_null(arr, lr)) return 0;
+    char buf[CELL_BUF_SIZE];
+    if (fmt[0] == 'l') return snprintf(buf, sizeof(buf), "%ld", ((const int64_t*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 'i') return snprintf(buf, sizeof(buf), "%d", ((const int32_t*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 'u' || fmt[0] == 'z') {
+        const int32_t* off = (const int32_t*)arr->buffers[1];
+        return off[arr->offset + lr + 1] - off[arr->offset + lr];
+    }
+    if (fmt[0] == 'U' || fmt[0] == 'Z') {
+        const int64_t* off = (const int64_t*)arr->buffers[1];
+        return off[arr->offset + lr + 1] - off[arr->offset + lr];
+    }
+    return 10;  // other types: ~10 chars
+}
 
-    char buf[64];
-    if (fmt[0] == 'l') {  // int64
-        int64_t v = ((const int64_t*)arr->buffers[1])[arr->offset + lr];
-        return snprintf(buf, sizeof(buf), "%ld", v);
+// | Get string length from batch/local_row (no find_batch overhead)
+static size_t cell_len_batch(struct ArrowArray* arr, const char* fmt, int64_t lr) {
+    if (is_null(arr, lr)) return 0;
+    char buf[CELL_BUF_SIZE];
+    if (fmt[0] == 'l') return snprintf(buf, sizeof(buf), "%ld", ((const int64_t*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 'i') return snprintf(buf, sizeof(buf), "%d", ((const int32_t*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 's') return snprintf(buf, sizeof(buf), "%d", ((const int16_t*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 'c') return snprintf(buf, sizeof(buf), "%d", ((const int8_t*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 'g') return snprintf(buf, sizeof(buf), "%g", ((const double*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 'f') return snprintf(buf, sizeof(buf), "%g", ((const float*)arr->buffers[1])[arr->offset + lr]);
+    if (fmt[0] == 'u' || fmt[0] == 'z') {
+        const int32_t* off = (const int32_t*)arr->buffers[1];
+        return off[arr->offset + lr + 1] - off[arr->offset + lr];
     }
-    if (fmt[0] == 'i') {  // int32
-        int32_t v = ((const int32_t*)arr->buffers[1])[arr->offset + lr];
-        return snprintf(buf, sizeof(buf), "%d", v);
+    if (fmt[0] == 'U' || fmt[0] == 'Z') {
+        const int64_t* off = (const int64_t*)arr->buffers[1];
+        return off[arr->offset + lr + 1] - off[arr->offset + lr];
     }
-    if (fmt[0] == 's') {  // int16
-        int16_t v = ((const int16_t*)arr->buffers[1])[arr->offset + lr];
-        return snprintf(buf, sizeof(buf), "%d", v);
-    }
-    if (fmt[0] == 'c') {  // int8
-        int8_t v = ((const int8_t*)arr->buffers[1])[arr->offset + lr];
-        return snprintf(buf, sizeof(buf), "%d", v);
-    }
-    if (fmt[0] == 'g') {  // float64
-        double v = ((const double*)arr->buffers[1])[arr->offset + lr];
-        return snprintf(buf, sizeof(buf), "%g", v);
-    }
-    if (fmt[0] == 'f') {  // float32
-        float v = ((const float*)arr->buffers[1])[arr->offset + lr];
-        return snprintf(buf, sizeof(buf), "%g", v);
-    }
-    if (fmt[0] == 'u' || fmt[0] == 'z') {  // utf8, binary
-        const int32_t* offsets = (const int32_t*)arr->buffers[1];
-        int64_t idx = arr->offset + lr;
-        return offsets[idx + 1] - offsets[idx];
-    }
-    if (fmt[0] == 'U' || fmt[0] == 'Z') {  // large utf8, large binary
-        const int64_t* offsets = (const int64_t*)arr->buffers[1];
-        int64_t idx = arr->offset + lr;
-        return offsets[idx + 1] - offsets[idx];
-    }
-    if (fmt[0] == 'b') return 5;  // "true" or "false"
-    if (fmt[0] == 'd') return 20; // decimal estimate
+    if (fmt[0] == 'b') return 5;   // "false" = 5 chars
+    if (fmt[0] == 'd') return 20;  // decimal: up to 20 digits
     if (fmt[0] == 't' && fmt[1] == 's') return 19;  // "YYYY-MM-DD HH:MM:SS"
     if (fmt[0] == 't' && fmt[1] == 't') return 8;   // "HH:MM:SS"
-    return 1;  // unknown
+    return 1;  // unknown type fallback
+}
+
+// | Format single cell from batch (no find_batch overhead)
+//
+// Arrow buffer layout:
+//   buffers[0]: validity bitmap (1 bit per row, 0=null)
+//   buffers[1]: data (fixed-width) or offsets (variable-length)
+//   buffers[2]: data bytes (variable-length only: utf8, binary)
+//
+// Fixed-width (int, float, bool, timestamp):
+//   data[arr->offset + lr] gives the value directly
+//
+// Variable-length (utf8 'u', binary 'z'):
+//   offsets[idx] to offsets[idx+1] gives byte range in buffers[2]
+//
+// arr: column ArrowArray from batch
+// fmt: Arrow format string (l=int64, u=utf8, g=float64, etc.)
+// lr: local row index within batch
+// buf: output buffer
+// buflen: buffer size
+// decimals: decimal places for floats
+// returns: length written
+static size_t format_cell_batch(struct ArrowArray* arr, const char* fmt, int64_t lr, char* buf, size_t buflen, uint8_t decimals) {
+    if (is_null(arr, lr)) { buf[0] = '\0'; return 0; }
+
+    if (fmt[0] == 'l') {  // int64
+        return snprintf(buf, buflen, "%ld", ((const int64_t*)arr->buffers[1])[arr->offset + lr]);
+    }
+    if (fmt[0] == 'i') {  // int32
+        return snprintf(buf, buflen, "%d", ((const int32_t*)arr->buffers[1])[arr->offset + lr]);
+    }
+    if (fmt[0] == 's') {  // int16
+        return snprintf(buf, buflen, "%d", ((const int16_t*)arr->buffers[1])[arr->offset + lr]);
+    }
+    if (fmt[0] == 'c') {  // int8
+        return snprintf(buf, buflen, "%d", ((const int8_t*)arr->buffers[1])[arr->offset + lr]);
+    }
+    if (fmt[0] == 'g') {  // float64
+        return snprintf(buf, buflen, "%.*f", decimals, ((const double*)arr->buffers[1])[arr->offset + lr]);
+    }
+    if (fmt[0] == 'f') {  // float32
+        return snprintf(buf, buflen, "%.*f", decimals, ((const float*)arr->buffers[1])[arr->offset + lr]);
+    }
+    if (fmt[0] == 'u' || fmt[0] == 'z') {  // utf8, binary
+        const int32_t* off = (const int32_t*)arr->buffers[1];
+        const char* data = (const char*)arr->buffers[2];
+        int64_t idx = arr->offset + lr;
+        int32_t len = off[idx + 1] - off[idx];
+        if ((size_t)len >= buflen) len = buflen - 1;
+        memcpy(buf, data + off[idx], len);
+        buf[len] = '\0';
+        return len;
+    }
+    if (fmt[0] == 'U' || fmt[0] == 'Z') {  // large utf8
+        const int64_t* off = (const int64_t*)arr->buffers[1];
+        const char* data = (const char*)arr->buffers[2];
+        int64_t idx = arr->offset + lr;
+        int64_t len = off[idx + 1] - off[idx];
+        if ((size_t)len >= buflen) len = buflen - 1;
+        memcpy(buf, data + off[idx], len);
+        buf[len] = '\0';
+        return len;
+    }
+    if (fmt[0] == 'b') {  // bool
+        const uint8_t* data = (const uint8_t*)arr->buffers[1];
+        int64_t idx = arr->offset + lr;
+        return snprintf(buf, buflen, "%s", ((data[idx/8] >> (idx%8)) & 1) ? "true" : "false");
+    }
+    if (fmt[0] == 'd' && fmt[1] == ':') {  // decimal
+        int scale = 0;
+        const char* p = fmt + 2;
+        while (*p && *p != ',') p++;
+        if (*p == ',') { p++; while (*p >= '0' && *p <= '9') scale = scale * 10 + (*p++ - '0'); }
+        double val = (double)((const int64_t*)arr->buffers[1])[(arr->offset + lr) * 2];
+        for (int i = 0; i < scale; i++) val /= 10.0;
+        return snprintf(buf, buflen, "%.*f", scale, val);
+    }
+    if (fmt[0] == 't' && fmt[1] == 's') {  // timestamp
+        int64_t us = ((const int64_t*)arr->buffers[1])[arr->offset + lr];
+        time_t secs = us / USEC_PER_SEC;
+        struct tm* tm = gmtime(&secs);
+        return snprintf(buf, buflen, "%04d-%02d-%02d %02d:%02d:%02d",
+                 tm->tm_year + TM_YEAR_BASE, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
+    }
+    if (fmt[0] == 't' && fmt[1] == 't') {  // time
+        int64_t us = ((const int64_t*)arr->buffers[1])[arr->offset + lr];
+        int64_t s = us / USEC_PER_SEC;
+        return snprintf(buf, buflen, "%02d:%02d:%02d", (int)((s/SEC_PER_HOUR)%HOURS_PER_DAY), (int)((s/SEC_PER_MIN)%MIN_PER_HOUR), (int)(s%SEC_PER_MIN));
+    }
+    buf[0] = '\0';
+    return 0;
 }
 
 // | Get column widths (max of header and all cells, capped at 50)
@@ -744,4 +837,308 @@ lean_obj_res lean_qr_col_widths(b_lean_obj_arg qr_obj, lean_obj_arg world) {
     }
 
     return lean_io_result_mk_ok(arr);
+}
+
+/* === Direct Terminal Rendering === */
+
+// | termbox2 attributes
+#define TB_BOLD      0x01000000
+#define TB_UNDERLINE 0x02000000
+#define HEADER_ATTR  (TB_BOLD | TB_UNDERLINE)
+
+// | Print string at (x,y) with padding to width w
+static void tb_print_pad(int x, int y, int w, uint32_t fg, uint32_t bg, const char* s, int right_align) {
+    int slen = 0;
+    for (const char* p = s; *p; p++) slen++;
+    int pad = w - slen;
+    if (pad < 0) pad = 0;
+    int i = 0;
+    // left pad for right-align
+    if (right_align) for (; i < pad && x + i < tb_width(); i++) tb_set_cell(x + i, y, ' ', fg, bg);
+    // string
+    for (const char* p = s; *p && x + i < tb_width(); p++, i++) tb_set_cell(x + i, y, (uint32_t)*p, fg, bg);
+    // right pad for left-align
+    if (!right_align) for (; i < w && x + i < tb_width(); i++) tb_set_cell(x + i, y, ' ', fg, bg);
+}
+
+// | Check if column is numeric (right-align)
+static int is_num_fmt(char f) { return f == 'l' || f == 'i' || f == 's' || f == 'c' || f == 'g' || f == 'f' || f == 'd'; }
+
+// | Find first batch containing row r0, returns batch index
+// Sets *offset to row offset at start of that batch
+static int64_t find_batch_start(QueryResult* qr, int64_t r0, int64_t* offset) {
+    *offset = 0;
+    for (int64_t i = 0; i < qr->n_batches; i++) {
+        if (r0 < *offset + qr->batches[i].length) return i;
+        *offset += qr->batches[i].length;
+    }
+    return qr->n_batches;
+}
+
+// | Compute column width (header + visible rows, capped)
+// Iterates batches directly to avoid find_batch overhead
+static int col_width(QueryResult* qr, int64_t col, int64_t r0, int64_t r1, int maxW) {
+    const char* name = qr->schema.children[col]->name;
+    const char* fmt = qr->schema.children[col]->format;
+    int w = name ? (int)strlen(name) : 0;
+    // find starting batch
+    int64_t batch_off;
+    int64_t bi = find_batch_start(qr, r0, &batch_off);
+    // iterate batches
+    for (; bi < qr->n_batches && batch_off < r1; bi++) {
+        struct ArrowArray* batch = &qr->batches[bi];
+        struct ArrowArray* arr = batch->children[col];
+        int64_t lr0 = (r0 > batch_off) ? r0 - batch_off : 0;
+        int64_t lr1 = (r1 < batch_off + batch->length) ? r1 - batch_off : batch->length;
+        for (int64_t lr = lr0; lr < lr1; lr++) {
+            int cw = (int)cell_len_batch(arr, fmt, lr);
+            if (cw > w) w = cw;
+            if (w >= maxW) return maxW;
+        }
+        batch_off += batch->length;
+    }
+    return w < maxW ? w : maxW;
+}
+
+// | Style indices for styles array
+#define STYLE_CURSOR     0   // cursor cell
+#define STYLE_SEL_ROW    1   // selected row
+#define STYLE_SEL_CUR    2   // selected col + cursor row
+#define STYLE_SEL_COL    3   // selected col
+#define STYLE_CUR_ROW    4   // cursor row
+#define STYLE_CUR_COL    5   // cursor col
+#define STYLE_DEFAULT    6   // default
+#define NUM_STYLES       7
+
+// | Column layout info for rendering
+typedef struct { int64_t idx; int x, w; } ColInfo;
+
+// | Check if column index is in selection array
+static int is_col_selected(b_lean_obj_arg selColIdxs, size_t nSelCols, int64_t colIdx) {
+    for (size_t i = 0; i < nSelCols; i++) {
+        if ((int64_t)lean_unbox(lean_array_get_core(selColIdxs, i)) == colIdx) return 1;
+    }
+    return 0;
+}
+
+// | Check if row index is in selection array
+static int is_row_selected(b_lean_obj_arg selRows, size_t nSelRows, int64_t rowIdx) {
+    for (size_t i = 0; i < nSelRows; i++) {
+        if (lean_unbox(lean_array_get_core(selRows, i)) == (size_t)rowIdx) return 1;
+    }
+    return 0;
+}
+
+// | Determine cell style index based on cursor/selection state
+static int get_cell_style(int isCursor, int isSelRow, int isSel, int isCurRow, int isCurCol) {
+    if (isCursor)               return STYLE_CURSOR;
+    if (isSelRow)               return STYLE_SEL_ROW;
+    if (isSel && isCurRow)      return STYLE_SEL_CUR;
+    if (isSel)                  return STYLE_SEL_COL;
+    if (isCurRow)               return STYLE_CUR_ROW;
+    if (isCurCol)               return STYLE_CUR_COL;
+    return STYLE_DEFAULT;
+}
+
+// | Extract variable-length string from Arrow array (caller must free)
+static char* extract_varlen_str(struct ArrowArray* arr, const char* fmt, int64_t lr) {
+    if (fmt[0] == 'u' || fmt[0] == 'z') {
+        const int32_t* off = (const int32_t*)arr->buffers[1];
+        const char* data = (const char*)arr->buffers[2];
+        int64_t idx = arr->offset + lr;
+        int32_t len = off[idx + 1] - off[idx];
+        char* s = malloc(len + 1);
+        memcpy(s, data + off[idx], len);
+        s[len] = '\0';
+        return s;
+    } else {  // U or Z (large strings)
+        const int64_t* off = (const int64_t*)arr->buffers[1];
+        const char* data = (const char*)arr->buffers[2];
+        int64_t idx = arr->offset + lr;
+        int64_t len = off[idx + 1] - off[idx];
+        char* s = malloc(len + 1);
+        memcpy(s, data + off[idx], len);
+        s[len] = '\0';
+        return s;
+    }
+}
+
+// | Render table batch-by-batch to terminal
+// colIdxs: Array Nat (column indices in display order, key cols first)
+// nKeyCols: number of key columns
+// colOff: column offset (skip first colOff columns in display order)
+// r0, r1: row range
+// curRow, curCol: cursor
+// selColIdxs: Array Nat (selected column indices)
+// selRows: Array Nat (selected row indices)
+// styles: Array UInt32 (14 values: 7 states × (fg|attrs, bg))
+// maxWStr: max width for string columns
+// maxWOther: max width for numeric/other columns
+// decimals: decimal places
+lean_obj_res lean_render_table(
+    b_lean_obj_arg qr_obj,
+    b_lean_obj_arg colIdxs,   // Array Nat
+    uint64_t nKeyCols,        // number of key columns
+    uint64_t colOff,          // column offset for horizontal scroll
+    uint64_t r0, uint64_t r1,
+    uint64_t curRow, uint64_t curCol,
+    b_lean_obj_arg selColIdxs,// Array Nat (selected column indices)
+    b_lean_obj_arg selRows,   // Array Nat
+    b_lean_obj_arg styles,    // Array UInt32 (14 values)
+    uint8_t maxWStr,          // max width for strings
+    uint8_t maxWOther,        // max width for others
+    uint8_t decimals,
+    lean_obj_arg world) {
+
+    log_msg("[render] entry\n");
+    QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
+    log_msg("[render] got qr\n");
+    size_t ncols = lean_array_size(colIdxs);
+    log_msg("[render] ncols=%zu nKeyCols=%lu colOff=%lu\n", ncols, (unsigned long)nKeyCols, (unsigned long)colOff);
+    size_t nSelCols = lean_array_size(selColIdxs);
+    size_t nSelRows = lean_array_size(selRows);
+    size_t nStyles = lean_array_size(styles);
+    log_msg("[render] nSelCols=%zu nSelRows=%zu nStyles=%zu\n", nSelCols, nSelRows, nStyles);
+    int screenW = tb_width();
+    log_msg("[render] screenW=%d\n", screenW);
+    char buf[CELL_BUF_SIZE];
+
+    // compute widths and x positions (start from colOff)
+    size_t startCol = (colOff < ncols) ? colOff : ncols;
+    ColInfo* ci = malloc(ncols * sizeof(ColInfo));
+    int x = 0;
+    size_t visCols = 0;
+    for (size_t i = startCol; i < ncols && x < screenW; i++) {
+        int64_t idx = lean_unbox(lean_array_get_core(colIdxs, i));
+        if (idx >= qr->schema.n_children) continue;
+        const char* fmt = qr->schema.children[idx]->format;
+        int is_str = (fmt[0] == 'u' || fmt[0] == 'U' || fmt[0] == 'z' || fmt[0] == 'Z');
+        int maxW = is_str ? maxWStr : maxWOther;
+        int w = col_width(qr, idx, r0, r1, maxW);
+        // truncate width if partially visible
+        if (x + w > screenW) w = screenW - x;
+        ci[visCols].idx = idx;
+        ci[visCols].x = x;
+        ci[visCols].w = w;
+        x += w + 1;  // +1 for gap
+        visCols++;
+    }
+
+    // find separator position: after last visible key column (first nKeyCols in display order)
+    int sepX = 0;
+    size_t visKeys = (nKeyCols < visCols) ? nKeyCols : visCols;
+    if (visKeys > 0) sepX = ci[visKeys - 1].x + ci[visKeys - 1].w;
+    log_msg("[render] sepX=%d nKeyCols=%lu colOff=%lu visKeys=%zu visCols=%zu\n",
+            sepX, (unsigned long)nKeyCols, (unsigned long)colOff, visKeys, visCols);
+
+    // extract styles
+    uint32_t stFg[NUM_STYLES], stBg[NUM_STYLES];
+    for (int s = 0; s < NUM_STYLES; s++) {
+        stFg[s] = lean_unbox_uint32(lean_array_get_core(styles, s * 2));
+        stBg[s] = lean_unbox_uint32(lean_array_get_core(styles, s * 2 + 1));
+    }
+
+    // render header at y=0 and y=nRows+1 (bottom)
+    int nDataRows = (int)(r1 - r0);
+    int yBottom = nDataRows + 1;
+    for (size_t c = 0; c < visCols; c++) {
+        int64_t colIdx = ci[c].idx;
+        const char* name = qr->schema.children[colIdx]->name;
+        if (!name) name = "";
+        int isSel = is_col_selected(selColIdxs, nSelCols, colIdx);
+        int isCurCol = (colIdx == (int64_t)curCol);
+        int si = isCurCol ? STYLE_CURSOR : (isSel ? STYLE_SEL_COL : STYLE_DEFAULT);
+        uint32_t fg = stFg[si] | HEADER_ATTR;
+        uint32_t bg = stBg[si];
+        tb_print_pad(ci[c].x, 0, ci[c].w, fg, bg, name, 0);
+        tb_print_pad(ci[c].x, yBottom, ci[c].w, fg, bg, name, 0);
+    }
+    // header separator
+    if (sepX > 0) {
+        tb_set_cell(sepX, 0, '|', stFg[STYLE_DEFAULT], stBg[STYLE_DEFAULT]);
+        tb_set_cell(sepX, yBottom, '|', stFg[STYLE_DEFAULT], stBg[STYLE_DEFAULT]);
+    }
+
+    // find starting batch for r0
+    int64_t batch_offset;
+    int64_t bi_start = find_batch_start(qr, (int64_t)r0, &batch_offset);
+    log_msg("[render] r0=%ld r1=%ld bi_start=%ld batch_offset=%ld visCols=%zu\n",
+            (long)r0, (long)r1, (long)bi_start, (long)batch_offset, visCols);
+
+    // iterate only needed batches
+    for (int64_t bi = bi_start; bi < qr->n_batches && batch_offset < (int64_t)r1; bi++) {
+        struct ArrowArray* batch = &qr->batches[bi];
+        int64_t batch_len = batch->length;
+        int64_t batch_end = batch_offset + batch_len;
+        log_msg("[render] batch %ld: offset=%ld len=%ld end=%ld\n",
+                (long)bi, (long)batch_offset, (long)batch_len, (long)batch_end);
+
+        // local row range within batch
+        int64_t lr0 = ((int64_t)r0 > batch_offset) ? (int64_t)r0 - batch_offset : 0;
+        int64_t lr1 = ((int64_t)r1 < batch_end) ? (int64_t)r1 - batch_offset : batch_len;
+        log_msg("[render] batch %ld: lr0=%ld lr1=%ld\n", (long)bi, (long)lr0, (long)lr1);
+
+        // for each visible column
+        for (size_t c = 0; c < visCols; c++) {
+            int64_t colIdx = ci[c].idx;
+            int cx = ci[c].x, cw = ci[c].w;
+            if (colIdx >= qr->schema.n_children) continue;
+
+            struct ArrowArray* carr = batch->children[colIdx];
+            const char* fmt = qr->schema.children[colIdx]->format;
+            int is_num = is_num_fmt(fmt[0]);
+            int is_varlen = (fmt[0] == 'u' || fmt[0] == 'U' || fmt[0] == 'z' || fmt[0] == 'Z');
+            int isSel = is_col_selected(selColIdxs, nSelCols, colIdx);
+            int isCurCol = (colIdx == (int64_t)curCol);
+
+            // render each row in batch
+            for (int64_t lr = lr0; lr < lr1; lr++) {
+                int64_t rowIdx = batch_offset + lr;
+                int y = (int)(rowIdx - r0 + 1);  // +1 for header
+                int isSelRow = is_row_selected(selRows, nSelRows, rowIdx);
+                int isCurRow = (rowIdx == (int64_t)curRow);
+                int si = get_cell_style(isCurRow && isCurCol, isSelRow, isSel, isCurRow, isCurCol);
+                uint32_t fg = stFg[si], bg = stBg[si];
+
+                // format cell
+                const char* cellStr;
+                char* dynStr = NULL;
+                if (is_null(carr, lr)) {
+                    cellStr = "";
+                } else if (is_varlen) {
+                    dynStr = extract_varlen_str(carr, fmt, lr);
+                    cellStr = dynStr;
+                } else {
+                    format_cell_batch(carr, fmt, lr, buf, sizeof(buf), decimals);
+                    cellStr = buf;
+                }
+
+                tb_print_pad(cx, y, cw, fg, bg, cellStr, is_num);
+                if (dynStr) free(dynStr);
+
+                // draw separator (once per row, on first column)
+                if (c == 0 && sepX > 0) {
+                    tb_set_cell(sepX, y, '|', stFg[STYLE_DEFAULT], stBg[STYLE_DEFAULT]);
+                }
+            }
+        }
+        batch_offset = batch_end;
+    }
+
+    log_msg("[render] done\n");
+
+    // build return array: Array (Nat × Nat × Nat) = Array (Nat × (Nat × Nat))
+    lean_object* result = lean_alloc_array(visCols, visCols);
+    for (size_t c = 0; c < visCols; c++) {
+        lean_object* inner = lean_alloc_ctor(0, 2, 0);  // (x, w)
+        lean_ctor_set(inner, 0, lean_box(ci[c].x));
+        lean_ctor_set(inner, 1, lean_box(ci[c].w));
+        lean_object* outer = lean_alloc_ctor(0, 2, 0);  // (idx, (x, w))
+        lean_ctor_set(outer, 0, lean_box(ci[c].idx));
+        lean_ctor_set(outer, 1, inner);
+        lean_array_set_core(result, c, outer);
+    }
+
+    free(ci);
+    return lean_io_result_mk_ok(result);
 }

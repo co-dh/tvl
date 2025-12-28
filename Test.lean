@@ -1,6 +1,6 @@
 /-
   Key tests for TV - matches Rust TV test suite
-  Run with: lake build test && LD_LIBRARY_PATH=/usr/local/lib .lake/build/bin/test
+  Run with: lake build test && .lake/build/bin/test
 -/
 import Tv.Backend
 

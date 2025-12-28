@@ -90,17 +90,14 @@ partial def loop (s : State) : IO Unit := do
   let w ← Term.width
   let h ← Term.height
   -- render table and overlays (h-3 for data, h-3 for header, h-2 for tab, h-1 for status)
-  let (off, cols, keyW) ← Render.table tbl v'.nav (h.toNat - 3) w.toNat v'.decimals v'.selCols v'.selRows
-  -- draw header again above tab line (convert display cursor to original index)
-  let dispCols := Render.displayCols v'.nav.keyCols di.colNames
-  let curColOrig := Render.colIndex (dispCols.getDisp v'.nav.colCur "") di.colNames
-  Render.header tbl cols curColOrig (h - 3) v'.selCols
-  if !v'.nav.keyCols.isEmpty then Term.print keyW.toUInt32 (h - 3) Term.default Term.default "|"
+  -- convert selCols names to indices for render
+  let selColIdxs := v'.selCols.filterMap fun name => di.colNames.findIdx? (· == name)
+  let (off, cols, keyW) ← Render.table tbl v'.nav (h.toNat - 3) v'.decimals selColIdxs v'.selRows
   let views := s.views.map fun v => (v.path, v.disp, v.query.render)
   Render.tabLine views (h - 2) w.toNat
   Render.statusBar v'.nav.rowCur v'.nav.colCur.val v'.nav.colOff.val (v'.total.getD di.nRows) w.toNat
                    v'.nav.keyCols v'.selCols v'.selRows (h - 1) s.msg s.err
-  if s.showInfo then Render.infoOverlay tbl curColOrig v'.nav.rowCur h.toNat w.toNat
+  if s.showInfo then Render.infoOverlay tbl 0 0 h.toNat w.toNat
   Term.present
   let newColOffset := off
   let v' := { v' with nav := { v'.nav with colOff := ⟨newColOffset⟩ } }

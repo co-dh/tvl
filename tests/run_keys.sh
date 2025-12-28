@@ -5,4 +5,4 @@
 cd "$(dirname "$0")/.."
 KEYS="${1:-}"
 FILE="${2:-tests/data/basic.csv}"
-TERM=xterm script -q -c "stty rows 24 cols 80; .lake/build/bin/tv --keys '$KEYS' '$FILE'" /dev/null 2>&1 | ansi2txt
+TERM=xterm LD_LIBRARY_PATH=/usr/local/lib script -q -c "stty rows 24 cols 80; .lake/build/bin/tv --keys '$KEYS' '$FILE'" /dev/null 2>&1 | ansi2txt

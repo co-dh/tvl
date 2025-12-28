@@ -143,10 +143,10 @@ def ofQueryResult (qr : Adbc.QueryResult) : IO SomeTable := do
   match unsafeIO (do
     if ← Adbc.cellIsNull t.qr r c then return Cell.null
     match t.colFmts.getD col '?' with
-    | 'l' | 'i' | 's' | 'c' => return Cell.int (← Adbc.cellInt t.qr r c)
-    | 'g' | 'f' | 'd' => return Cell.float (← Adbc.cellFloat t.qr r c)
-    | 'b' => return Cell.bool ((← Adbc.cellStr t.qr r c) == "true")
-    | _ => return Cell.str (← Adbc.cellStr t.qr r c)) with
+    | 'l' | 'i' | 's' | 'c' => return Cell.int   (← Adbc.cellInt t.qr r c)
+    | 'g' | 'f' | 'd'       => return Cell.float (← Adbc.cellFloat t.qr r c)
+    | 'b'                   => return Cell.bool  ((← Adbc.cellStr t.qr r c) == "true")
+    | _                     => return Cell.str   (← Adbc.cellStr t.qr r c)) with
   | Except.ok cell => cell
   | Except.error _ => Cell.null
 
@@ -156,6 +156,15 @@ def getIdx (t : SomeTable) (_ _ : Nat) : Cell := .null
 -- | Get DisplayInfo
 def info (t : SomeTable) : DisplayInfo :=
   ⟨t.colNames, t.colWidths, t.nRows, t.nCols⟩
+
+-- | Render table to terminal (batch-by-batch in C)
+-- Returns visible columns: Array (colIdx, x, width)
+def render (t : SomeTable) (colIdxs : Array Nat) (nKeyCols colOff : Nat)
+           (r0 r1 curRow curCol : Nat) (selColIdxs selRows : Array Nat)
+           (styles : Array UInt32) (maxWStr maxWOther decimals : UInt8) : IO (Array (Nat × Nat × Nat)) :=
+  Adbc.renderTable t.qr colIdxs nKeyCols.toUInt64 colOff.toUInt64
+    r0.toUInt64 r1.toUInt64 curRow.toUInt64 curCol.toUInt64
+    selColIdxs selRows styles maxWStr maxWOther decimals
 
 -- | Empty table
 def empty : IO SomeTable := do

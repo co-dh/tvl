@@ -10,6 +10,7 @@ lean_lib Tv where
 @[default_target]
 lean_exe tv where
   root := `Main
+  moreLeancArgs := #["-g"]
   moreLinkArgs := #["c/libtermshim.a", "c/libadbcshim.a", "-L/usr/local/lib", "-ltermbox2", "-Wl,-rpath,/usr/local/lib", "-Wl,--allow-shlib-undefined"]
 
 lean_exe test where
