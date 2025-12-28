@@ -8,7 +8,7 @@ namespace Prql
 
 -- | Aggregate function (for PRQL group/agg)
 inductive Agg where
-  | count | sum | avg | min | max | stddev
+  | count | sum | avg | min | max | stddev | dist
   deriving Repr, Inhabited
 
 -- | PRQL operation (single pipe stage)
@@ -48,11 +48,12 @@ def renderSort (col : String) (asc : Bool) : String :=
 def Agg.name : Agg → String
   | .count => "std.count" | .sum => "std.sum" | .avg => "std.average"
   | .min => "std.min" | .max => "std.max" | .stddev => "std.stddev"
+  | .dist => "std.count_distinct"
 
 -- | Short name for result column (no std. prefix)
 def Agg.short : Agg → String
   | .count => "count" | .sum => "sum" | .avg => "average"
-  | .min => "min" | .max => "max" | .stddev => "stddev"
+  | .min => "min" | .max => "max" | .stddev => "stddev" | .dist => "dist"
 
 -- | Render single operation to PRQL string
 def Op.render : Op → String
@@ -102,7 +103,8 @@ def buildFilter (cols : Array String) (vals : Array Cell) : String :=
 -- | Parse agg function name to Agg
 def Agg.parse : String → Option Agg
   | "count" => some .count | "sum" => some .sum | "average" => some .avg
-  | "min" => some .min | "max" => some .max | "stddev" => some .stddev | _ => none
+  | "min" => some .min | "max" => some .max | "stddev" => some .stddev
+  | "dist" => some .dist | _ => none
 
 -- | PRQL function definitions (prepended to all queries)
 -- Matches rust tv's cfg/funcs.prql (use std.count to avoid ambiguity with column named 'count')

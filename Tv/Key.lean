@@ -355,7 +355,7 @@ def getAggFuncs (s : State) (keyNames aggNames : Array String) : IO (Array Strin
   let keysStr := keyNames.join ","
   let colsStr := aggNames.join ","
   let prompt := s!"group \{{keysStr}} (agg \{? {colsStr}}) [Tab=multi]: "
-  fzfMulti #["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev" s.testMode
+  fzfMulti #["--prompt=" ++ prompt] "count\nsum\naverage\nmin\nmax\nstddev\ndist" s.testMode
 
 -- | b - aggregate by key columns
 def b (c : KeyCtx) (s : State) : KeyResult := do
