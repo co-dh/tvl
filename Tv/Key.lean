@@ -235,7 +235,7 @@ namespace Key
 -- .getD s: extract State, default to s if None
 def atSign (c : KeyCtx) (s : State) : KeyResult :=
   fzfIdx #["--prompt=Column: "] (Render.displayCols c.v.nav.keyCols c.di.colNames) s.testMode
-    <&> (·.map (fun idx => runKey c (.colJump idx) s) |>.getD s)
+    <&> (·.map (fun i => runKey c (.colJump i) s) |>.getD s)
 
 -- | Build filter expression from fzf result
 def buildFilterExpr (col : String) (vals : Array String) (result : String) : String :=
