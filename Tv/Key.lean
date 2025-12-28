@@ -260,9 +260,8 @@ def s (c : KeyCtx) (st : State) : KeyResult :=
 
 -- | M - meta view (works on any view)
 def M (c : KeyCtx) (s : State) : KeyResult :=
-  Meta.queryMeta c.v.query.render c.v.path <&> fun
-    | .ok t => runKey c (.M t) s
-    | .error _ => s  -- error already logged by Backend
+  Meta.queryMeta c.v.query.render c.v.path
+    <&> (·.map (fun st => runKey c (.M st) s) |>.getD s)
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
 def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=

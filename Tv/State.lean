@@ -96,23 +96,12 @@ def maxRows : Nat := 1000
 
 -- | Fetch table for view (uses cache or queries backend). Returns error msg if any.
 def View.fetch (v : View) : IO (View × SomeTable × String) := do
-  match v.cache with
-  | some st => return (v, st, "")
-  | none =>
-    let prql := v.query.render
-    match ← Backend.query (Backend.mkLimited prql maxRows) with
-    | .ok st =>
-      let total ← match v.total with
-        | some n => pure n
-        | none => match ← Backend.queryCount prql with
-          | .ok n => pure n
-          | .error _ => pure st.nRows
-      return ({ v with cache := some st, total := some total }, st, "")
-    | .error e =>
-      Backend.setErr s!"Query error: {e}"
-      let short := e.splitOn "───" |>.head? |>.getD e |>.take 80
-      let empty ← SomeTable.empty
-      return (v, empty, short)
+  if let some st := v.cache then return (v, st, "")
+  let prql := v.query.render
+  let r ← Backend.query (Backend.mkLimited prql maxRows) >>= (·.bindIO fun st => do
+    let total ← v.total.map pure |>.getD ((← Backend.queryCount prql).getD st.nRows |> pure)
+    pure (some ({ v with cache := some st, total := some total }, st, "")))
+  r.map pure |>.getD (do return (v, ← SomeTable.empty, ""))
 
 -- | Invalidate cache (after PRQL change)
 def View.invalidate (v : View) : View := { v with cache := none }

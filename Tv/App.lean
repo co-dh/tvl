@@ -9,6 +9,7 @@ import Tv.State
 import Tv.Fzf
 import Tv.Prql
 import Tv.Key
+import Tv.Error
 
 namespace App
 
@@ -120,9 +121,9 @@ partial def loop (s : State) : IO Unit := do
     pure (ev, s)
   -- handleKey gets DisplayInfo only - no cell access possible
   let s' ← if ev.type == Term.eventKey then handleKey s di ev h.toNat w.toNat else pure s
-  -- pop any backend errors to status bar
-  let backendErr ← Backend.popErr
-  let s' := if backendErr.isEmpty then s' else { s' with err := backendErr }
+  -- pop any errors to status bar
+  let err ← Error.pop
+  let s' := if err.isEmpty then s' else { s' with err := err }
   loop s'
 
 -- | Run app with optional replay keys
@@ -130,11 +131,11 @@ def run (path : String) (keys : String := "") (testMode : Bool := false) : IO Un
   -- init backend before terminal (debug output goes to normal screen)
   let ok ← Backend.init
   if !ok then
-    Backend.setErr "Failed to init backend"
+    Error.set "Failed to init backend"
     return
   let r ← Term.init
   if r < 0 then
-    Backend.setErr "Failed to init terminal"
+    Error.set "Failed to init terminal"
     return
   let v : View := ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
   let s : State := { curView := v, keys := keys.toList.toArray, testMode := testMode }

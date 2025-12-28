@@ -2,6 +2,7 @@
   Type-safe PRQL statement constructor
 -/
 import Tv.Types
+import Tv.Error
 
 namespace Prql
 
@@ -118,7 +119,7 @@ theorem funcs_has_pct : (funcs.splitOn "Pct").length > 1 := by native_decide
 theorem funcs_has_bar : (funcs.splitOn "Bar").length > 1 := by native_decide
 
 -- | Compile PRQL to SQL using prqlc CLI (stdin → stdout)
-def compile (prql : String) : IO (Except String String) := do
+def compile (prql : String) : IO (Option String) := do
   let full := funcs ++ "\n" ++ prql
   let child ← IO.Process.spawn {
     cmd := "prqlc"
@@ -133,7 +134,7 @@ def compile (prql : String) : IO (Except String String) := do
   let stdout ← child'.stdout.readToEnd
   let stderr ← child'.stderr.readToEnd
   let code ← child'.wait
-  if code == 0 then return .ok stdout
-  else return .error s!"prqlc: {stderr}"
+  if code == 0 then return some stdout
+  else Error.set s!"prqlc: {stderr}"; return none
 
 end Prql

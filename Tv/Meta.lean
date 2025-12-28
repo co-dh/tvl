@@ -6,6 +6,7 @@ import Tv.State
 import Tv.Backend
 import Tv.Prql
 import Tv.Source
+import Tv.Error
 
 namespace App.Meta
 
@@ -64,24 +65,20 @@ def colStatsSql (colName colType : String) : String :=
   s!"CAST(MIN({q}) AS VARCHAR) AS min, CAST(MAX({q}) AS VARCHAR) AS max"
 
 -- | Query column metadata (stats for all columns via SQL UNION)
-def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := do
+def queryMeta (prql : String) (path : String) : IO (Option SomeTable) := do
   -- Try cache for base queries on real files (no pipe = base query)
   let canCache := (prql.splitOn " | ").length == 1 && !Source.isSource path
   if canCache then
     if let some st ← loadCache path then
       Backend.logPrql s!"[meta] cached {cachePath path}"
-      return .ok st
+      return some st
   -- Get schema first
   let schemaPrql := prql ++ " | take 1"
-  match ← Backend.query (Backend.mkLimited schemaPrql 1) with
-  | .error e => return .error e
-  | .ok schema =>
+  Backend.query (Backend.mkLimited schemaPrql 1) >>= (·.bindIO fun schema => do
     let colNames := schema.colNames
-    if colNames.isEmpty then return .ok (← SomeTable.empty)
-    -- Get types from Arrow format
-    match ← Prql.compile schemaPrql with
-    | .error e => return .error e
-    | .ok sql =>
+    if colNames.isEmpty then return some (← SomeTable.empty)
+    -- Get types from Arrow format, build meta SQL, execute
+    Prql.compile schemaPrql >>= (·.bindIO fun sql => do
       try
         let qr ← Adbc.query sql
         let nc ← Adbc.ncols qr
@@ -89,33 +86,21 @@ def queryMeta (prql : String) (path : String) : IO (Except String SomeTable) := 
         for c in [:nc.toNat] do
           let fmt ← Adbc.colFmt qr c.toUInt64
           types := types.push (fmtToType (fmtChar fmt))
-        -- Build UNION ALL query for all columns
-        let mut unions : Array String := #[]
-        for i in [:colNames.size] do
-          unions := unions.push (colStatsSql (colNames.getD i "") (types.getD i "?"))
+        let unions := (Array.range colNames.size).map fun i =>
+          colStatsSql (colNames.getD i "") (types.getD i "?")
         -- Compile base PRQL to get FROM clause
-        let basePrql := prql ++ " | take 1"
-        match ← Prql.compile basePrql with
-        | .error e => return .error e
-        | .ok baseSql =>
-          -- Normalize whitespace for parsing
+        Prql.compile (prql ++ " | take 1") >>= (·.bindIO fun baseSql => do
           let baseSql := baseSql.replace "\n" " " |>.replace "  " " "
-          -- Extract FROM clause (after "FROM ", before WHERE/ORDER/LIMIT)
           let parts := baseSql.splitOn "FROM "
           let rest := parts.getD 1 ""
           let tbl := ((rest.splitOn " WHERE").head?.getD rest).splitOn " ORDER"
                      |>.head?.getD rest |>.splitOn " LIMIT" |>.head?.getD rest
-          let fromClause := "FROM " ++ tbl
-          -- Full meta query
-          let metaSql := unions.map (· ++ " " ++ fromClause) |>.toList |> String.intercalate " UNION ALL "
+          let metaSql := unions.map (· ++ " FROM " ++ tbl) |>.toList |> String.intercalate " UNION ALL "
           Backend.logPrql s!"[meta] {metaSql}"
-          -- Save to cache for base queries
           if canCache then saveCache path metaSql
-          let st ← Backend.execSql metaSql
-          return .ok st
+          pure (some (← Backend.execSql metaSql)))
       catch e =>
-        Backend.setErr s!"queryMeta: {e}"
-        return .error s!"{e}"
+        Error.set s!"queryMeta: {e}"; pure none))
 
 -- | Select rows where cell at column satisfies predicate
 def selectRows (st : SomeTable) (col : Nat) (pred : Cell → Bool) : Array Nat :=
