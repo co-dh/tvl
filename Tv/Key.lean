@@ -249,9 +249,10 @@ def backslash (c : KeyCtx) (s : State) : KeyResult := do
   let col := curColName c
   let vals := (← Backend.queryDistinct c.v.query.render col).getD #[]
   let prompt := s!"PRQL: {col} == 'x' | > 5 | ~= 'pat' > "
-  (← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode)
-    |>.map (buildFilterExpr col vals) |>.filter (!·.isEmpty)
-    |>.map (fun expr => runKey c (.backslash expr) s) |>.getD s |> pure
+  let some result ← fzf #["--print-query", "--prompt=" ++ prompt] (vals.join "\n") s.testMode | return s
+  let expr := buildFilterExpr col vals result
+  if expr.isEmpty then return s
+  return runKey c (.backslash expr) s
 
 -- | s - select columns
 def s (c : KeyCtx) (st : State) : KeyResult :=
