@@ -205,7 +205,7 @@ where
                let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
                s.push (Freq.mkView c.v cols)
     | _, .backslash expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
-    | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
+    | _, .s cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
     | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
     | _, .pushFile path => s.push ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
     | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
@@ -254,9 +254,9 @@ def backslash (c : KeyCtx) (s : State) : KeyResult := do
     |>.map (fun expr => runKey c (.backslash expr) s) |>.getD s |> pure
 
 -- | s - select columns
-def sel (c : KeyCtx) (s : State) : KeyResult :=
-  fzfMulti #["--prompt=Select: "] (c.di.colNames.join "\n") s.testMode
-    <&> fun cols => runKey c (.selectCols cols) s
+def s (c : KeyCtx) (st : State) : KeyResult :=
+  fzfMulti #["--prompt=Select: "] (c.di.colNames.join "\n") st.testMode
+    <&> fun cols => runKey c (.s cols) st
 
 -- | M - meta view (works on any view)
 def M (c : KeyCtx) (s : State) : KeyResult :=
