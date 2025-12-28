@@ -265,18 +265,15 @@ def M (c : KeyCtx) (s : State) : KeyResult :=
     | .error _ => s  -- error already logged by Backend
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
-def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult := do
+def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult :=
   let mkPath := fun name => let base := c.v.path.drop pfx.length
                             if base == "." then name else s!"{base}/{name}"
-  match ← Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount with
-  | none => pure s
-  | some vals =>
-    match vals.getD Source.colPath .null |>.str?.filter (!·.isEmpty) with
-    | none => pure s
-    | some name =>
-      let perms := vals.getD Source.colPerms .null |>.str?.getD ""
-      if perms.startsWith "d" then pure (runKey { c with row := some vals } .ret s)
+  Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount >>= fun vals =>
+    vals.bind (fun vs => vs.getD Source.colPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
+      let perms := vs.getD Source.colPerms .null |>.str?.getD ""
+      if perms.startsWith "d" then pure (runKey { c with row := some vs } .ret s)
       else runBat (mkPath name) *> pure s
+    ) |>.getD (pure s)
 
 -- | ret on folder (source:ls/lr)
 def retFld (c : KeyCtx) (s : State) : KeyResult :=

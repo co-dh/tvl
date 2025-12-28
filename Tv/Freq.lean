@@ -31,9 +31,8 @@ def runKey (v : View) (s : State) (cols : Array String) (row : Option (Array Cel
 
 -- | ret on freqV: query row, then apply pure runKey
 def ret (prql : String) (rowCur : Nat) (cols : Array String) (v : View) (s : State) : IO State :=
-  Backend.queryRow prql rowCur cols.size <&> fun
-    | some vals => runKey v s cols (some vals) .ret |>.getD s
-    | none => s
+  Backend.queryRow prql rowCur cols.size
+    <&> (·.bind (runKey v s cols · .ret) |>.getD s)
 
 -- | Simp lemmas for keys Freq doesn't handle
 @[simp] theorem runKey_j : runKey v s cols row .j = none := rfl
