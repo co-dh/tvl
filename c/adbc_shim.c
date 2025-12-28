@@ -137,6 +137,9 @@ static FILE* g_log = NULL;
 static void log_msg(const char* fmt, ...) {
     if (!g_log) g_log = fopen("/tmp/tv.log", "a");
     if (!g_log) return;
+    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm* t = localtime(&ts.tv_sec);
+    fprintf(g_log, "%02d:%02d:%02d.%03ld ", t->tm_hour, t->tm_min, t->tm_sec, ts.tv_nsec / 1000000);
     va_list args;
     va_start(args, fmt);
     vfprintf(g_log, fmt, args);
