@@ -27,7 +27,8 @@ def chCtrlD : UInt32 := 4  -- Ctrl+D (page down)
 def chCtrlU : UInt32 := 21 -- Ctrl+U (page up)
 def chLBrack : UInt32 := 91  -- '[' sort asc
 def chRBrack : UInt32 := 93  -- ']' sort desc
-def chM : UInt32 := 77       -- 'M' meta view
+def chM : UInt32 := 77       -- 'M' meta view (all columns)
+def chm : UInt32 := 109      -- 'm' meta view (selected + cursor, grouped by keys)
 def chAt : UInt32 := 64      -- '@' column jump
 def chBackslash : UInt32 := 92 -- '\' filter
 def chS : UInt32 := 115      -- 's' select columns
@@ -93,7 +94,7 @@ def sortBy (v : View) (col : String) (asc : Bool) : View :=
   v.copy (query := v.query.pipe (.sort (cols.map (·, asc))))
 
 -- | Get selected columns + current column (unique, cur always last)
-def selColNames (v : View) (di : DisplayInfo) : Array String :=
+def selAndCurCols (v : View) (di : DisplayInfo) : Array String :=
   let dispCols := Render.displayCols v.nav.keyCols di.colNames
   let cur := dispCols.getDisp v.nav.colCur "?"
   v.selCols.filter (· != cur) |>.push cur
@@ -101,7 +102,7 @@ def selColNames (v : View) (di : DisplayInfo) : Array String :=
 -- | Delete columns from view (returns none if no cols left)
 def delCols (v : View) (di : DisplayInfo) : Option View :=
   let curIdx := v.nav.colCur
-  let delNames := selColNames v di
+  let delNames := selAndCurCols v di
   let allDelCols := v.nav.delCols ++ delNames.filter (!v.nav.delCols.contains ·)
   let keepCols := di.colNames.filter (!delNames.contains ·)
   if keepCols.size > 0 then
@@ -119,7 +120,7 @@ def delCols (v : View) (di : DisplayInfo) : Option View :=
 def toggleKeyCols (v : View) (di : DisplayInfo) : View :=
   let dispCols := Render.displayCols v.nav.keyCols di.colNames
   let curName := dispCols.getDisp v.nav.colCur "?"
-  let colNames := selColNames v di
+  let colNames := selAndCurCols v di
   let allIn := colNames.all v.nav.keyCols.contains
   let newKeys := if allIn then v.nav.keyCols.filter (!colNames.contains ·)
                  else v.nav.keyCols ++ colNames.filter (!v.nav.keyCols.contains ·)
@@ -362,9 +363,16 @@ def b (c : KeyCtx) (s : State) : KeyResult := do
   if c.v.nav.keyCols.isEmpty then pure { s with msg := "Set key columns first with !" }
   else
     let keyNames := c.v.nav.keyCols
-    let aggNames := selColNames c.v c.di
+    let aggNames := selAndCurCols c.v c.di
     let funcs ← getAggFuncs s keyNames aggNames
     pure (if funcs.isEmpty then s else runKey c (.pushAgg keyNames funcs aggNames) s)
+
+-- | m - stats for selected + cursor columns (count, dist, min, max)
+def m (c : KeyCtx) (s : State) : KeyResult := do
+  let keyNames := c.v.nav.keyCols  -- use keys if set, else empty
+  let aggNames := selAndCurCols c.v c.di
+  let funcs := #["count", "dist", "min", "max"]
+  pure (runKey c (.pushAgg keyNames funcs aggNames) s)
 
 -- | : - command mode (fzf select source)
 def colon (_c : KeyCtx) (s : State) : KeyResult := do

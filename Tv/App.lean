@@ -70,6 +70,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   else if ev.ch == chBackslash                           then Key.backslash c s
   else if ev.ch == chS                                   then Key.s c s
   else if ev.ch == chM                                   then Key.M c s
+  else if ev.ch == chm                                   then Key.m c s
   else if ev.key == Term.keyEnter || ev.ch == 13         then Key.ret c s
   else if ev.ch == chB                                   then Key.b c s
   else if ev.ch == chColon                               then Key.colon c s
