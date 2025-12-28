@@ -202,8 +202,7 @@ where
     -- push views
     | _, .F => let cur := curColName c
                let cols := if n.keyCols.contains cur then n.keyCols else n.keyCols.push cur
-               let colStr := cols.join ","
-               s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {colStr}", { keyCols := cols }, .freqV colStr, none, #[], #[], none, defDecimals⟩
+               s.push ⟨c.v.path, c.v.query.freq cols, s!"freq {cols.join ","}", { keyCols := cols }, .freqV cols, none, #[], #[], none, defDecimals⟩
     | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
     | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
     | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
@@ -223,8 +222,7 @@ where
           let p := s!"{Source.ls}{if base == "." then name else s!"{base}/{name}"}"
           s.push ⟨p, { base := Source.fromExpr p }, s!"ls {name}", {}, .fld, none, #[], #[], none, defDecimals⟩
       ) |>.getD s
-    | .freqV colNames, .ret =>
-      let cols := colNames.splitOn "," |>.map String.trim |>.toArray
+    | .freqV cols, .ret =>
       let pq := s.parents.getD 0 c.v |>.query
       c.row.map (fun vals =>
         let expr := Prql.buildFilter cols vals
@@ -271,8 +269,7 @@ def M (c : KeyCtx) (s : State) : KeyResult :=
     <&> fun r => r.toOption.map (fun t => runKey c (.pushMeta t) s) |>.getD s
 
 -- | ret on freqV: query row, call pure ret
-def retFreq (c : KeyCtx) (colNames : String) (s : State) : KeyResult :=
-  let cols := colNames.splitOn "," |>.map String.trim |>.toArray
+def retFreq (c : KeyCtx) (cols : Array String) (s : State) : KeyResult :=
   Backend.queryRow c.v.query.render c.v.nav.rowCur cols.size
     <&> fun r => r.toOption.map (fun v => runKey { c with row := some v } .ret s) |>.getD s
 
@@ -313,7 +310,7 @@ theorem runKey_l_colCur (c : KeyCtx) (s : State) :
 -- | ret - enter key (dispatch by ViewKind, IO cases)
 def ret (c : KeyCtx) (s : State) : KeyResult :=
   match c.v.vkind with
-  | .freqV colNames => retFreq c colNames s
+  | .freqV cols => retFreq c cols s
   | .tbl => pure (runKey c .ret s)
   | .colMeta => pure (runKey c .ret s)
   | .fld => retFld c s

@@ -21,10 +21,10 @@ structure PureState where
 
 -- | View kind: how to render/interact
 inductive ViewKind where
-  | tbl                    -- table view
-  | freqV (col : String)   -- frequency view for column
-  | colMeta                -- column metadata
-  | fld                    -- folder browser
+  | tbl                         -- table view
+  | freqV (cols : Array String) -- frequency view for columns
+  | colMeta                     -- column metadata
+  | fld                         -- folder browser
   deriving Inhabited
 
 -- | Default decimal places for float display
