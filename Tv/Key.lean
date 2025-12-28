@@ -206,7 +206,6 @@ where
     | _, .pushFilter expr => s.push ⟨c.v.path, c.v.query.filter expr, s!"filter {expr}", {}, .tbl, none, #[], #[], none, c.v.decimals⟩
     | _, .selectCols cols => if cols.isEmpty then s else s.setCur (c.v.copy (query := c.v.query.select cols))
     | _, .pushMeta metaTbl => s.push ⟨c.v.path, c.v.query, "meta", {}, .colMeta, some metaTbl, #[], #[], some metaTbl.nRows, defDecimals⟩
-    | _, .pushSource cmd => let p := s!"{Source.pfx}{cmd}"; s.push ⟨p, { base := Source.fromExpr p }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
     | _, .pushFile path => s.push ⟨path, { base := Source.fromExpr path }, "", {}, .tbl, none, #[], #[], none, defDecimals⟩
     | _, .inputRename => { s with inputMode := .renameTo, inputBuf := "" }
     | _, .colon => { s with inputMode := .command, inputBuf := "" }

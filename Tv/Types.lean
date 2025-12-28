@@ -208,7 +208,7 @@ inductive PureKey where
   | bang | spc | incDec (inc : Bool) | q | esc
   -- views (push new view)
   | F | pushFilter (expr : String) | selectCols (cols : Array String)
-  | pushMeta (metaTbl : SomeTable) | pushSource (cmd : String) | pushFile (path : String)
+  | pushMeta (metaTbl : SomeTable) | pushFile (path : String)
   -- input modes
   | inputRename | colon
   -- agg (funcs as strings: "count", "sum", "average", "min", "max", "stddev")
