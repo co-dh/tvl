@@ -81,14 +81,6 @@ def Query.filter (q : Query) (expr : String) : Query := q.pipe (.filter expr)
 def Query.select (q : Query) (cols : Array String) : Query := q.pipe (.sel cols)
 def Query.derive1 (q : Query) (name expr : String) : Query := q.pipe (.derive #[(name, expr)])
 
--- | Frequency query with percentage bar
-def Query.freq (q : Query) (cols : Array String) : Query :=
-  let grp : Op := .group cols #[(.count, "Cnt", "this")]
-  let pct : Op := .derive #[("Pct", "Cnt * 100 / std.sum Cnt"),
-                            ("Bar", "s\"repeat('#', CAST({Pct} / 5 AS INTEGER))\"")]
-  let srt : Op := .sort #[("Cnt", false)]  -- desc
-  { q with ops := q.ops ++ #[grp, pct, srt] }
-
 -- | Aggregate query (group by keys, apply funcs to cols)
 def Query.agg (q : Query) (keys : Array String) (funcs : Array Agg) (cols : Array String) : Query :=
   let aggs := funcs.flatMap fun f => cols.map fun c => (f, s!"{f.short}_{c}", c)

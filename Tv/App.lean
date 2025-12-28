@@ -47,9 +47,7 @@ def handleInput (s : State) (v : View) (di : DisplayInfo) (ev : Term.Event) : IO
       let cmd := s.inputBuf.trim
       if cmd.startsWith "freq " then
         let cols := (cmd.drop 5).trim.splitOn "," |>.map String.trim |>.toArray
-        let nav : PureState := { keyCols := cols }
-        let fv : View := ⟨v.path, v.query.freq cols, s!"freq {cols.join ","}", nav, .freqV cols, none, #[], #[], none, defDecimals⟩
-        return some { s.push fv with inputMode := .none, inputBuf := "" }
+        return some { s.push (Freq.mkView v cols) with inputMode := .none, inputBuf := "" }
       else if cmd.startsWith "lr " then
         let dir := cmd.drop 3 |>.trim
         let p := s!"{Source.lr}{dir}"
