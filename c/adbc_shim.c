@@ -192,80 +192,42 @@ static int load_adbc_funcs(void) {
            pAdbcStatementExecuteQuery && pAdbcStatementRelease;
 }
 
+// | Check ADBC call, log and goto fail on error
+#define ADBC_CHECK(call, msg) do { \
+    if ((call) != ADBC_STATUS_OK) { \
+        log_msg("[adbc] %s: %s\n", msg, err.message ? err.message : "?"); \
+        goto fail; \
+    } \
+} while(0)
+
 // | Init ADBC (in-memory DuckDB)
 lean_obj_res lean_adbc_init(lean_obj_arg world) {
-    if (g_initialized) {
-        return lean_io_result_mk_ok(lean_box(1));
-    }
-
-    // Load functions via dlopen
-    if (!load_adbc_funcs()) {
-        log_msg( "[adbc] load_adbc_funcs failed\n");
-        return lean_io_result_mk_ok(lean_box(0));
-    }
+    if (g_initialized) return lean_io_result_mk_ok(lean_box(1));
+    if (!load_adbc_funcs()) { log_msg("[adbc] load_adbc_funcs failed\n"); return lean_io_result_mk_ok(lean_box(0)); }
 
     struct AdbcError err;
     init_error(&err);
+    int have_db = 0, have_conn = 0;
 
-    // Create database
-    if (pAdbcDatabaseNew(&g_db, &err) != ADBC_STATUS_OK) {
-        log_msg( "[adbc] DatabaseNew failed: %s\n", err.message ? err.message : "?");
-        free_error(&err);
-        return lean_io_result_mk_ok(lean_box(0));
-    }
+    ADBC_CHECK(pAdbcDatabaseNew(&g_db, &err), "DatabaseNew");
+    have_db = 1;
+    ADBC_CHECK(pAdbcDatabaseSetOption(&g_db, "driver", "/usr/lib/libduckdb.so", &err), "SetOption(driver)");
+    ADBC_CHECK(pAdbcDatabaseSetOption(&g_db, "entrypoint", "duckdb_adbc_init", &err), "SetOption(entrypoint)");
+    ADBC_CHECK(pAdbcDatabaseSetOption(&g_db, "path", "", &err), "SetOption(path)");
+    ADBC_CHECK(pAdbcDatabaseInit(&g_db, &err), "DatabaseInit");
+    ADBC_CHECK(pAdbcConnectionNew(&g_conn, &err), "ConnectionNew");
+    have_conn = 1;
+    ADBC_CHECK(pAdbcConnectionInit(&g_conn, &g_db, &err), "ConnectionInit");
 
-    // Set driver to duckdb
-    if (pAdbcDatabaseSetOption(&g_db, "driver", "/usr/lib/libduckdb.so", &err) != ADBC_STATUS_OK) {
-        log_msg( "[adbc] DatabaseSetOption(driver) failed: %s\n", err.message ? err.message : "?");
-        pAdbcDatabaseRelease(&g_db, &err);
-        free_error(&err);
-        return lean_io_result_mk_ok(lean_box(0));
-    }
-
-    // Set entrypoint
-    if (pAdbcDatabaseSetOption(&g_db, "entrypoint", "duckdb_adbc_init", &err) != ADBC_STATUS_OK) {
-        log_msg( "[adbc] DatabaseSetOption(entrypoint) failed: %s\n", err.message ? err.message : "?");
-        pAdbcDatabaseRelease(&g_db, &err);
-        free_error(&err);
-        return lean_io_result_mk_ok(lean_box(0));
-    }
-
-    // Set path="" for in-memory
-    if (pAdbcDatabaseSetOption(&g_db, "path", "", &err) != ADBC_STATUS_OK) {
-        log_msg( "[adbc] DatabaseSetOption(path) failed: %s\n", err.message ? err.message : "?");
-        pAdbcDatabaseRelease(&g_db, &err);
-        free_error(&err);
-        return lean_io_result_mk_ok(lean_box(0));
-    }
-
-    // Init database
-    if (pAdbcDatabaseInit(&g_db, &err) != ADBC_STATUS_OK) {
-        log_msg( "[adbc] DatabaseInit failed: %s\n", err.message ? err.message : "?");
-        pAdbcDatabaseRelease(&g_db, &err);
-        free_error(&err);
-        return lean_io_result_mk_ok(lean_box(0));
-    }
-
-    // Create connection
-    if (pAdbcConnectionNew(&g_conn, &err) != ADBC_STATUS_OK) {
-        log_msg( "[adbc] ConnectionNew failed: %s\n", err.message ? err.message : "?");
-        pAdbcDatabaseRelease(&g_db, &err);
-        free_error(&err);
-        return lean_io_result_mk_ok(lean_box(0));
-    }
-
-    // Init connection
-    if (pAdbcConnectionInit(&g_conn, &g_db, &err) != ADBC_STATUS_OK) {
-        log_msg( "[adbc] ConnectionInit failed: %s\n", err.message ? err.message : "?");
-        pAdbcConnectionRelease(&g_conn, &err);
-        pAdbcDatabaseRelease(&g_db, &err);
-        free_error(&err);
-        return lean_io_result_mk_ok(lean_box(0));
-    }
-
-    log_msg( "[adbc] initialized OK\n");
+    log_msg("[adbc] initialized OK\n");
     g_initialized = 1;
     return lean_io_result_mk_ok(lean_box(1));
+
+fail:
+    if (have_conn) pAdbcConnectionRelease(&g_conn, &err);
+    if (have_db) pAdbcDatabaseRelease(&g_db, &err);
+    free_error(&err);
+    return lean_io_result_mk_ok(lean_box(0));
 }
 
 // | Shutdown ADBC
@@ -327,81 +289,51 @@ static lean_external_class* get_qr_class(void) {
 
 // | Execute SQL query, return QueryResult
 lean_obj_res lean_adbc_query(b_lean_obj_arg sql_obj, lean_obj_arg world) {
-    if (!g_initialized) {
-        return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("ADBC not initialized")));
-    }
+    if (!g_initialized) return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("ADBC not initialized")));
 
     const char* sql = lean_string_cstr(sql_obj);
     struct AdbcError err;
     init_error(&err);
-
-    // Create statement
     struct AdbcStatement stmt = {0};
-    if (pAdbcStatementNew(&g_conn, &stmt, &err) != ADBC_STATUS_OK) {
-        const char* msg = err.message ? err.message : "StatementNew failed";
-        lean_object* e = lean_mk_io_user_error(lean_mk_string(msg));
-        free_error(&err);
-        return lean_io_result_mk_error(e);
-    }
-
-    // Set SQL
-    if (pAdbcStatementSetSqlQuery(&stmt, sql, &err) != ADBC_STATUS_OK) {
-        const char* msg = err.message ? err.message : "SetSqlQuery failed";
-        lean_object* e = lean_mk_io_user_error(lean_mk_string(msg));
-        pAdbcStatementRelease(&stmt, &err);
-        free_error(&err);
-        return lean_io_result_mk_error(e);
-    }
-
-    // Execute
     struct ArrowArrayStream stream = {0};
+    QueryResult* qr = NULL;
+    const char* fail_msg = NULL;
+
+    #define QUERY_CHECK(call, msg) if ((call) != ADBC_STATUS_OK) { fail_msg = err.message ? err.message : msg; goto fail; }
+    #define STREAM_CHECK(call, msg) if ((call) != 0) { fail_msg = msg; goto fail; }
+
+    QUERY_CHECK(pAdbcStatementNew(&g_conn, &stmt, &err), "StatementNew");
+    QUERY_CHECK(pAdbcStatementSetSqlQuery(&stmt, sql, &err), "SetSqlQuery");
     int64_t rows_affected = -1;
-    if (pAdbcStatementExecuteQuery(&stmt, &stream, &rows_affected, &err) != ADBC_STATUS_OK) {
-        const char* msg = err.message ? err.message : "ExecuteQuery failed";
-        lean_object* e = lean_mk_io_user_error(lean_mk_string(msg));
-        pAdbcStatementRelease(&stmt, &err);
-        free_error(&err);
-        return lean_io_result_mk_error(e);
-    }
+    QUERY_CHECK(pAdbcStatementExecuteQuery(&stmt, &stream, &rows_affected, &err), "ExecuteQuery");
 
-    // Alloc result
-    QueryResult* qr = calloc(1, sizeof(QueryResult));
+    qr = calloc(1, sizeof(QueryResult));
+    STREAM_CHECK(stream.get_schema(&stream, &qr->schema), "get_schema");
 
-    // Get schema
-    if (stream.get_schema(&stream, &qr->schema) != 0) {
-        free(qr);
-        if (stream.release) stream.release(&stream);
-        pAdbcStatementRelease(&stmt, &err);
-        return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("get_schema failed")));
-    }
-
-    // Collect batches
-    int64_t cap = 16;  // initial capacity, grows 2x as needed
+    // collect batches
+    int64_t cap = 16;
     qr->batches = malloc(cap * sizeof(struct ArrowArray));
-    qr->n_batches = 0;
-    qr->total_rows = 0;
-
     while (1) {
         struct ArrowArray batch = {0};
-        if (stream.get_next(&stream, &batch) != 0) break;
-        if (batch.release == NULL) break;  // end of stream
-
-        if (qr->n_batches >= cap) {
-            cap *= 2;
-            qr->batches = realloc(qr->batches, cap * sizeof(struct ArrowArray));
-        }
+        if (stream.get_next(&stream, &batch) != 0 || !batch.release) break;
+        if (qr->n_batches >= cap) { cap *= 2; qr->batches = realloc(qr->batches, cap * sizeof(struct ArrowArray)); }
         qr->batches[qr->n_batches++] = batch;
         qr->total_rows += batch.length;
     }
 
-    // Cleanup
     if (stream.release) stream.release(&stream);
     pAdbcStatementRelease(&stmt, &err);
     free_error(&err);
+    return lean_io_result_mk_ok(lean_alloc_external(get_qr_class(), qr));
 
-    // Wrap as external
-    lean_object* obj = lean_alloc_external(get_qr_class(), qr);
-    return lean_io_result_mk_ok(obj);
+fail:
+    if (qr) { free(qr->batches); free(qr); }
+    if (stream.release) stream.release(&stream);
+    if (stmt.private_data) pAdbcStatementRelease(&stmt, &err);
+    free_error(&err);
+    return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string(fail_msg)));
+    #undef QUERY_CHECK
+    #undef STREAM_CHECK
 }
 
 // | Get column count
@@ -461,116 +393,71 @@ static int is_null(struct ArrowArray* arr, int64_t row) {
     return !(validity[idx / 8] & (1 << (idx % 8)));
 }
 
+// | Cell info: batch array + format + local row (NULL arr if invalid)
+typedef struct { struct ArrowArray* arr; const char* fmt; int64_t lr; } CellInfo;
+
+// | Get cell info (returns NULL arr if out of bounds)
+static CellInfo get_cell(QueryResult* qr, int64_t row, int64_t col) {
+    CellInfo ci = {NULL, NULL, 0};
+    int64_t bi;
+    if (!find_batch(qr, row, &bi, &ci.lr)) return ci;
+    if (col >= qr->schema.n_children) return ci;
+    ci.arr = qr->batches[bi].children[col];
+    ci.fmt = qr->schema.children[col]->format;
+    return ci;
+}
+
 // forward decl
 static size_t format_cell_batch(struct ArrowArray* arr, const char* fmt, int64_t lr, char* buf, size_t buflen, uint8_t decimals);
 
 // | Get cell as string (uses format_cell_batch, 3 decimal places)
 lean_obj_res lean_qr_cell_str(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col, lean_obj_arg world) {
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
-    int64_t bi, lr;
-    if (!find_batch(qr, (int64_t)row, &bi, &lr)) return lean_io_result_mk_ok(lean_mk_string(""));
-    if ((int64_t)col >= qr->schema.n_children) return lean_io_result_mk_ok(lean_mk_string(""));
-    struct ArrowArray* arr = qr->batches[bi].children[col];
-    const char* fmt = qr->schema.children[col]->format;
+    CellInfo c = get_cell(qr, row, col);
+    if (!c.arr) return lean_io_result_mk_ok(lean_mk_string(""));
     char buf[CELL_BUF_SIZE];
-    format_cell_batch(arr, fmt, lr, buf, sizeof(buf), 3);
+    format_cell_batch(c.arr, c.fmt, c.lr, buf, sizeof(buf), 3);
     return lean_io_result_mk_ok(lean_mk_string(buf));
 }
 
 // | Get cell as Int (0 for null/non-int)
 lean_obj_res lean_qr_cell_int(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col, lean_obj_arg world) {
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
-
-    int64_t bi, lr;
-    if (!find_batch(qr, (int64_t)row, &bi, &lr)) {
-        return lean_io_result_mk_ok(lean_int64_to_int(0));
-    }
-
-    if ((int64_t)col >= qr->schema.n_children) {
-        return lean_io_result_mk_ok(lean_int64_to_int(0));
-    }
-
-    struct ArrowArray* batch = &qr->batches[bi];
-    struct ArrowArray* arr = batch->children[col];
-    const char* fmt = qr->schema.children[col]->format;
-
-    if (is_null(arr, lr)) {
-        return lean_io_result_mk_ok(lean_int64_to_int(0));
-    }
-
+    CellInfo c = get_cell(qr, row, col);
+    if (!c.arr || is_null(c.arr, c.lr)) return lean_io_result_mk_ok(lean_int64_to_int(0));
     int64_t val = 0;
-    if (fmt[0] == 'l') {
-        val = ((const int64_t*)arr->buffers[1])[arr->offset + lr];
-    } else if (fmt[0] == 'i') {
-        val = ((const int32_t*)arr->buffers[1])[arr->offset + lr];
-    } else if (fmt[0] == 's') {  // int16
-        val = ((const int16_t*)arr->buffers[1])[arr->offset + lr];
-    } else if (fmt[0] == 'c') {  // int8
-        val = ((const int8_t*)arr->buffers[1])[arr->offset + lr];
-    }
-
+    if (c.fmt[0] == 'l')      val = ((const int64_t*)c.arr->buffers[1])[c.arr->offset + c.lr];
+    else if (c.fmt[0] == 'i') val = ((const int32_t*)c.arr->buffers[1])[c.arr->offset + c.lr];
+    else if (c.fmt[0] == 's') val = ((const int16_t*)c.arr->buffers[1])[c.arr->offset + c.lr];
+    else if (c.fmt[0] == 'c') val = ((const int8_t*)c.arr->buffers[1])[c.arr->offset + c.lr];
     return lean_io_result_mk_ok(lean_int64_to_int(val));
 }
 
 // | Get cell as Float (0.0 for null/non-float)
 lean_obj_res lean_qr_cell_float(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col, lean_obj_arg world) {
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
-
-    int64_t bi, lr;
-    if (!find_batch(qr, (int64_t)row, &bi, &lr)) {
-        return lean_io_result_mk_ok(lean_box_float(0.0));
-    }
-
-    if ((int64_t)col >= qr->schema.n_children) {
-        return lean_io_result_mk_ok(lean_box_float(0.0));
-    }
-
-    struct ArrowArray* batch = &qr->batches[bi];
-    struct ArrowArray* arr = batch->children[col];
-    const char* fmt = qr->schema.children[col]->format;
-
-    if (is_null(arr, lr)) {
-        return lean_io_result_mk_ok(lean_box_float(0.0));
-    }
-
+    CellInfo c = get_cell(qr, row, col);
+    if (!c.arr || is_null(c.arr, c.lr)) return lean_io_result_mk_ok(lean_box_float(0.0));
     double val = 0.0;
-    if (fmt[0] == 'g') {  // float64/double
-        val = ((const double*)arr->buffers[1])[arr->offset + lr];
-    } else if (fmt[0] == 'f') {  // float32
-        val = ((const float*)arr->buffers[1])[arr->offset + lr];
-    }
-
+    if (c.fmt[0] == 'g')      val = ((const double*)c.arr->buffers[1])[c.arr->offset + c.lr];
+    else if (c.fmt[0] == 'f') val = ((const float*)c.arr->buffers[1])[c.arr->offset + c.lr];
     return lean_io_result_mk_ok(lean_box_float(val));
 }
 
 // | Check if cell is null
 lean_obj_res lean_qr_cell_is_null(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col, lean_obj_arg world) {
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
-
-    int64_t bi, lr;
-    if (!find_batch(qr, (int64_t)row, &bi, &lr)) {
-        return lean_io_result_mk_ok(lean_box(1));  // out of bounds = null
-    }
-
-    if ((int64_t)col >= qr->schema.n_children) {
-        return lean_io_result_mk_ok(lean_box(1));
-    }
-
-    struct ArrowArray* batch = &qr->batches[bi];
-    struct ArrowArray* arr = batch->children[col];
-
-    return lean_io_result_mk_ok(lean_box(is_null(arr, lr) ? 1 : 0));
+    CellInfo c = get_cell(qr, row, col);
+    return lean_io_result_mk_ok(lean_box(!c.arr || is_null(c.arr, c.lr) ? 1 : 0));
 }
 
 // forward decl
 static size_t cell_len_batch(struct ArrowArray* arr, const char* fmt, int64_t lr);
 
-// | Get string length (uses find_batch, for lean_qr_col_widths)
+// | Get string length (uses get_cell, for lean_qr_col_widths)
 static size_t cell_str_len(QueryResult* qr, int64_t row, int64_t col) {
-    int64_t bi, lr;
-    if (!find_batch(qr, row, &bi, &lr)) return 0;
-    if (col >= qr->schema.n_children) return 0;
-    return cell_len_batch(qr->batches[bi].children[col], qr->schema.children[col]->format, lr);
+    CellInfo c = get_cell(qr, row, col);
+    return c.arr ? cell_len_batch(c.arr, c.fmt, c.lr) : 0;
 }
 
 // | Get string length from batch/local_row (no find_batch overhead)
