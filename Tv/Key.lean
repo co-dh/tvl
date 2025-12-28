@@ -265,14 +265,13 @@ def M (c : KeyCtx) (s : State) : KeyResult :=
 
 -- | ret on source (ls/lr): query row, dir→pure ret, file→bat
 def retSource (c : KeyCtx) (s : State) (pfx : String) : KeyResult := do
-  let mkPath := fun name => let base := c.v.path.drop pfx.length
-                            if base == "." then name else s!"{base}/{name}"
-  let vals ← Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount
-  vals.bind (fun vs => vs.getD Source.colPath .null |>.str?.filter (!·.isEmpty) |>.map fun name =>
-    let perms := vs.getD Source.colPerms .null |>.str?.getD ""
-    if perms.startsWith "d" then pure (runKey { c with row := some vs } .ret s)
-    else runBat (mkPath name) *> pure s
-  ) |>.getD (pure s)
+  let base := c.v.path.drop pfx.length
+  let mkPath := fun name => if base == "." then name else s!"{base}/{name}"
+  let some vs ← Backend.queryRow c.v.query.render c.v.nav.rowCur Source.colCount | return s
+  let some name := vs.getD Source.colPath .null |>.str?.filter (!·.isEmpty) | return s
+  let perms := vs.getD Source.colPerms .null |>.str?.getD ""
+  if perms.startsWith "d" then return runKey { c with row := some vs } .ret s
+  else runBat (mkPath name); return s
 
 -- | ret on folder (source:ls/lr)
 def retFld (c : KeyCtx) (s : State) : KeyResult :=
