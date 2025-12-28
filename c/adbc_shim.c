@@ -461,136 +461,20 @@ static int is_null(struct ArrowArray* arr, int64_t row) {
     return !(validity[idx / 8] & (1 << (idx % 8)));
 }
 
-// | Get cell as string (returns static "null" for null, caller must not free)
+// forward decl
+static size_t format_cell_batch(struct ArrowArray* arr, const char* fmt, int64_t lr, char* buf, size_t buflen, uint8_t decimals);
+
+// | Get cell as string (uses format_cell_batch, 3 decimal places)
 lean_obj_res lean_qr_cell_str(b_lean_obj_arg qr_obj, uint64_t row, uint64_t col, lean_obj_arg world) {
     QueryResult* qr = (QueryResult*)lean_get_external_data(qr_obj);
-
     int64_t bi, lr;
-    if (!find_batch(qr, (int64_t)row, &bi, &lr)) {
-        return lean_io_result_mk_ok(lean_mk_string(""));
-    }
-
-    if ((int64_t)col >= qr->schema.n_children) {
-        return lean_io_result_mk_ok(lean_mk_string(""));
-    }
-
-    struct ArrowArray* batch = &qr->batches[bi];
-    struct ArrowArray* arr = batch->children[col];
+    if (!find_batch(qr, (int64_t)row, &bi, &lr)) return lean_io_result_mk_ok(lean_mk_string(""));
+    if ((int64_t)col >= qr->schema.n_children) return lean_io_result_mk_ok(lean_mk_string(""));
+    struct ArrowArray* arr = qr->batches[bi].children[col];
     const char* fmt = qr->schema.children[col]->format;
-
-    if (is_null(arr, lr)) {
-        return lean_io_result_mk_ok(lean_mk_string(""));
-    }
-
     char buf[CELL_BUF_SIZE];
-
-    // Dispatch on Arrow format
-    if (fmt[0] == 'l') {  // int64
-        const int64_t* data = (const int64_t*)arr->buffers[1];
-        snprintf(buf, sizeof(buf), "%ld", data[arr->offset + lr]);
-        return lean_io_result_mk_ok(lean_mk_string(buf));
-    }
-    if (fmt[0] == 'i') {  // int32
-        const int32_t* data = (const int32_t*)arr->buffers[1];
-        snprintf(buf, sizeof(buf), "%d", data[arr->offset + lr]);
-        return lean_io_result_mk_ok(lean_mk_string(buf));
-    }
-    if (fmt[0] == 'g') {  // float64
-        const double* data = (const double*)arr->buffers[1];
-        snprintf(buf, sizeof(buf), "%g", data[arr->offset + lr]);
-        return lean_io_result_mk_ok(lean_mk_string(buf));
-    }
-    if (fmt[0] == 'f') {  // float32
-        const float* data = (const float*)arr->buffers[1];
-        snprintf(buf, sizeof(buf), "%g", data[arr->offset + lr]);
-        return lean_io_result_mk_ok(lean_mk_string(buf));
-    }
-    if (fmt[0] == 'u' || fmt[0] == 'U' || fmt[0] == 'z' || fmt[0] == 'Z') {
-        // utf8 (u), large_utf8 (U), binary (z), large_binary (Z)
-        // Variable-length: offsets in buffer[1], data in buffer[2]
-        if (fmt[0] == 'u' || fmt[0] == 'z') {
-            const int32_t* offsets = (const int32_t*)arr->buffers[1];
-            const char* data = (const char*)arr->buffers[2];
-            int64_t idx = arr->offset + lr;
-            int32_t start = offsets[idx];
-            int32_t end = offsets[idx + 1];
-            int32_t len = end - start;
-            char* s = malloc(len + 1);
-            memcpy(s, data + start, len);
-            s[len] = '\0';
-            lean_object* obj = lean_mk_string(s);
-            free(s);
-            return lean_io_result_mk_ok(obj);
-        } else {
-            const int64_t* offsets = (const int64_t*)arr->buffers[1];
-            const char* data = (const char*)arr->buffers[2];
-            int64_t idx = arr->offset + lr;
-            int64_t start = offsets[idx];
-            int64_t end = offsets[idx + 1];
-            int64_t len = end - start;
-            char* s = malloc(len + 1);
-            memcpy(s, data + start, len);
-            s[len] = '\0';
-            lean_object* obj = lean_mk_string(s);
-            free(s);
-            return lean_io_result_mk_ok(obj);
-        }
-    }
-    if (fmt[0] == 'b') {  // bool
-        const uint8_t* data = (const uint8_t*)arr->buffers[1];
-        int64_t idx = arr->offset + lr;
-        int val = (data[idx / 8] >> (idx % 8)) & 1;
-        return lean_io_result_mk_ok(lean_mk_string(val ? "true" : "false"));
-    }
-    if (fmt[0] == 'd' && fmt[1] == ':') {  // decimal (d:precision,scale,bitwidth)
-        // Parse scale from format string manually (avoid atoi/strtol)
-        int scale = 0;
-        const char* p = fmt + 2;  // skip "d:"
-        while (*p && *p != ',') p++;  // skip precision
-        if (*p == ',') {
-            p++;
-            while (*p >= '0' && *p <= '9') {
-                scale = scale * 10 + (*p - '0');
-                p++;
-            }
-        }
-        // DuckDB uses 128-bit decimals, stored as two 64-bit ints (little-endian)
-        const int64_t* data = (const int64_t*)arr->buffers[1];
-        int64_t idx = arr->offset + lr;
-        int64_t lo = data[idx * 2];
-        // Simple case: just use lo
-        double val = (double)lo;
-        for (int i = 0; i < scale; i++) val /= 10.0;
-        snprintf(buf, sizeof(buf), "%.*f", scale, val);
-        return lean_io_result_mk_ok(lean_mk_string(buf));
-    }
-    if (fmt[0] == 't' && fmt[1] == 's') {  // timestamp (tsu:, tsm:, tsn:, tss:)
-        // Stored as int64 microseconds since epoch (for tsu:)
-        const int64_t* data = (const int64_t*)arr->buffers[1];
-        int64_t idx = arr->offset + lr;
-        int64_t us = data[idx];
-        time_t secs = us / USEC_PER_SEC;
-        struct tm* tm = gmtime(&secs);
-        snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
-                 tm->tm_year + TM_YEAR_BASE, tm->tm_mon + 1, tm->tm_mday,
-                 tm->tm_hour, tm->tm_min, tm->tm_sec);
-        return lean_io_result_mk_ok(lean_mk_string(buf));
-    }
-    if (fmt[0] == 't' && fmt[1] == 't') {  // time (ttu, ttm, ttn, tts)
-        // Stored as int64 microseconds since midnight (for ttu)
-        const int64_t* data = (const int64_t*)arr->buffers[1];
-        int64_t idx = arr->offset + lr;
-        int64_t us = data[idx];
-        int64_t secs = us / USEC_PER_SEC;
-        int h = (secs / SEC_PER_HOUR) % HOURS_PER_DAY;
-        int m = (secs / SEC_PER_MIN) % MIN_PER_HOUR;
-        int s = secs % SEC_PER_MIN;
-        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
-        return lean_io_result_mk_ok(lean_mk_string(buf));
-    }
-
-    // Unknown format - return format string for debug
-    return lean_io_result_mk_ok(lean_mk_string(fmt));
+    format_cell_batch(arr, fmt, lr, buf, sizeof(buf), 3);
+    return lean_io_result_mk_ok(lean_mk_string(buf));
 }
 
 // | Get cell as Int (0 for null/non-int)
@@ -678,26 +562,15 @@ lean_obj_res lean_qr_cell_is_null(b_lean_obj_arg qr_obj, uint64_t row, uint64_t 
     return lean_io_result_mk_ok(lean_box(is_null(arr, lr) ? 1 : 0));
 }
 
+// forward decl
+static size_t cell_len_batch(struct ArrowArray* arr, const char* fmt, int64_t lr);
+
 // | Get string length (uses find_batch, for lean_qr_col_widths)
 static size_t cell_str_len(QueryResult* qr, int64_t row, int64_t col) {
     int64_t bi, lr;
     if (!find_batch(qr, row, &bi, &lr)) return 0;
     if (col >= qr->schema.n_children) return 0;
-    struct ArrowArray* arr = qr->batches[bi].children[col];
-    const char* fmt = qr->schema.children[col]->format;
-    if (is_null(arr, lr)) return 0;
-    char buf[CELL_BUF_SIZE];
-    if (fmt[0] == 'l') return snprintf(buf, sizeof(buf), "%ld", ((const int64_t*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 'i') return snprintf(buf, sizeof(buf), "%d", ((const int32_t*)arr->buffers[1])[arr->offset + lr]);
-    if (fmt[0] == 'u' || fmt[0] == 'z') {
-        const int32_t* off = (const int32_t*)arr->buffers[1];
-        return off[arr->offset + lr + 1] - off[arr->offset + lr];
-    }
-    if (fmt[0] == 'U' || fmt[0] == 'Z') {
-        const int64_t* off = (const int64_t*)arr->buffers[1];
-        return off[arr->offset + lr + 1] - off[arr->offset + lr];
-    }
-    return 10;  // other types: ~10 chars
+    return cell_len_batch(qr->batches[bi].children[col], qr->schema.children[col]->format, lr);
 }
 
 // | Get string length from batch/local_row (no find_batch overhead)
