@@ -105,6 +105,7 @@ def handleKey (s : State) (di : DisplayInfo) (ev : Term.Event) (screenH screenW 
   else if ev.ch == chComma then pure (runKey c (.incDec false) s)
   else if ev.ch == chLL then Key.L c s
   else if ev.ch == chR then Source.r s
+  else if ev.ch == chRR then Source.R s
   else if ev.ch == chQ then pure (runKey c .q s)
   else if ev.key == Term.keyEsc then pure (runKey c .esc s)
   else if ev.ch == chCtrlC then pure { s with quit := true }

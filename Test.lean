@@ -339,8 +339,8 @@ def test_no_stderr : IO Unit := do
   let out ← IO.Process.output { cmd := "grep", args := #["-r", "eprintln", "Tv/"] }
   assert (out.stdout.trim.isEmpty) s!"Found stderr writes in Tv/: {out.stdout}"
 
--- | 'r' key shows lr view
-def test_ls_view : IO Unit := do
+-- | 'r' key shows lr view (recursive)
+def test_lr_view : IO Unit := do
   let output ← runKeys "r" "tests/data/basic.csv"
   let (tab, _) := footer output
   assert (contains tab "lr ./") s!"r should show 'lr ./' in tab: {tab}"
@@ -362,6 +362,20 @@ def test_lr_columns : IO Unit := do
   let output ← runKeys "rM" "tests/data/basic.csv"
   -- Meta view shows 7 rows for 7 columns
   assert (contains output "0/7") s!"lr should have 7 columns: {output}"
+  assert (contains output "permissions") s!"should have permissions: {output}"
+  assert (contains output "path") s!"should have path: {output}"
+
+-- | R key shows ls view (non-recursive)
+def test_ls_view : IO Unit := do
+  let output ← runKeys "R" "tests/data/basic.csv"
+  let (tab, _) := footer output
+  assert (contains tab "ls ./") s!"R should show 'ls ./' in tab: {tab}"
+
+-- | ls should have 7 columns (permissions, links, owner, grp, size, datetime, path)
+def test_ls_columns : IO Unit := do
+  let output ← runKeys "RM" "tests/data/basic.csv"
+  -- Meta view shows 7 rows for 7 columns
+  assert (contains output "0/7") s!"ls should have 7 columns: {output}"
   assert (contains output "permissions") s!"should have permissions: {output}"
   assert (contains output "path") s!"should have path: {output}"
 
@@ -432,10 +446,12 @@ def main : IO Unit := do
   test_lr_paths
   test_numeric_right_align
   test_no_stderr
-  test_ls_view
+  test_lr_view
   test_lr_files
   test_lr_meta_types
   test_lr_columns
+  test_ls_view
+  test_ls_columns
   test_multi_null_keycols_nav
 
   Backend.shutdown

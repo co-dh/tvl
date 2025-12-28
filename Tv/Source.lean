@@ -41,24 +41,30 @@ def awkN (n : Nat) : String :=
 def findFmt : String := "\"%M\\t%n\\t%u\\t%g\\t%s\\t%TY-%Tm-%Td_%TH:%TM\\t%p\\n\""
 
 -- | Build shell command that outputs tab-separated data
--- Returns (cmd, hasHeader). Quotes escaped for PRQL s-string (\").
+-- Returns (cmd, hasHeader). ls/lr without path default to "."
 def shellCmd (src : String) : String × Bool :=
   match src with
   | "ps"  => ("ps aux" ++ awkN 11, true)
   | "df"  => ("df -h" ++ awkN 6, true)
   | "env" => ("env | awk -F= '{print $1\"\\t\"substr($0,index($0,\"=\")+1)}'", false)
+  | "ls"  => (s!"find . -maxdepth 1 -printf {findFmt} 2>/dev/null", false)
+  | "lr"  => (s!"find . -printf {findFmt} 2>/dev/null", false)
   | s => if s.startsWith "ls:" then
            (s!"find {s.drop 3} -maxdepth 1 -printf {findFmt} 2>/dev/null", false)
          else if s.startsWith "lr:" then
            (s!"find {s.drop 3} -printf {findFmt} 2>/dev/null", false)
          else ("echo unknown", false)
 
+-- | Check if source is ls/lr type (needs lsCols)
+def isLsLr (s : String) : Bool :=
+  s == "ls" || s == "lr" || s.startsWith "ls:" || s.startsWith "lr:"
+
 -- | Build column spec for read_csv (only for headerless sources)
 def colSpec (src : String) : Option String :=
   let cols := match src with
     | "ps" | "df" => none  -- use header from command
     | "env" => some envCols
-    | s => if s.startsWith "ls:" || s.startsWith "lr:" then some lsCols else some "line"
+    | s => if isLsLr s then some lsCols else some "line"
   cols.map fun c => "{" ++ (c.splitOn "," |>.map (s!"'{·}':'VARCHAR'") |> String.intercalate ",") ++ "}"
 
 -- | Escape single quotes for SQL (double them)
@@ -83,7 +89,7 @@ def createTmpTable (path : String) : IO String := do
   let tbl ← nextTmpName
   let expr := sourceExpr path
   let src := path.drop pfx.length
-  let cols := if src.startsWith "ls:" || src.startsWith "lr:" then lsCast else "*"
+  let cols := if isLsLr src then lsCast else "*"
   let sql := s!"CREATE OR REPLACE TEMP TABLE {tbl} AS SELECT {cols} FROM {expr}"
   let _ ← Adbc.query sql
   pure tbl
@@ -107,5 +113,8 @@ def pushView (cmd : String) (disp : String) (vk : App.ViewKind) (s : App.State) 
 
 -- | r key - recursive list directory
 def r (s : App.State) : IO App.State := pushView "lr:." "lr ./" App.ViewKind.fld s
+
+-- | R key - list directory (non-recursive)
+def R (s : App.State) : IO App.State := pushView "ls:." "ls ./" App.ViewKind.fld s
 
 end Source
