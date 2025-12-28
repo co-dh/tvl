@@ -306,6 +306,16 @@ def test_meta_1_enter_sets_keycols : IO Unit := do
   assert (contains hdr "|") s!"Should have key col separator after M1<ret>: {hdr}"
   assert (contains status "keys=1") s!"Should have 1 key col: {status}"
 
+def test_separator_not_shown_when_keycol_scrolled : IO Unit := do
+  -- Set key column, scroll right past it - separator should NOT appear
+  let output ← runKeys "!llllllllllllllllll" "tests/data/sample.parquet"
+  let hdr := header output
+  let (_, status) := footer output
+  -- Verify we scrolled (colOff > 0)
+  assert (contains status "+") s!"Should have scrolled: {status}"
+  -- Separator should NOT be in header since key col is off screen
+  assert (!contains hdr "|") s!"Separator should not show when key col scrolled off: {hdr}"
+
 def test_aggregate_requires_key : IO Unit := do
   let output ← runKeys "b" "tests/data/basic.csv"
   let (_, status) := footer output
@@ -426,6 +436,7 @@ def main : IO Unit := do
   test_toggle_key_remove
   test_navigation_down
   test_space_selects_column
+  test_separator_not_shown_when_keycol_scrolled
 
   -- test_command.rs
   test_multi_column_select

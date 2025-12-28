@@ -1024,9 +1024,11 @@ lean_obj_res lean_render_table(
         visCols++;
     }
 
-    // find separator position: after last visible key column (first nKeyCols in display order)
+    // find separator position: after last visible key column
+    // account for colOff - if scrolled past key cols, no separator
     int sepX = 0;
-    size_t visKeys = (nKeyCols < visCols) ? nKeyCols : visCols;
+    size_t visKeys = (colOff < nKeyCols) ? nKeyCols - colOff : 0;
+    if (visKeys > visCols) visKeys = visCols;
     if (visKeys > 0) sepX = ci[visKeys - 1].x + ci[visKeys - 1].w;
     log_msg("[render] sepX=%d nKeyCols=%lu colOff=%lu visKeys=%zu visCols=%zu\n",
             sepX, (unsigned long)nKeyCols, (unsigned long)colOff, visKeys, visCols);
