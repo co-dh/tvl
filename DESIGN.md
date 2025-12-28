@@ -18,49 +18,76 @@ Reimplement tv (CSV/Parquet browser) in Lean 4 with:
                        │
 ┌──────────────────────▼──────────────────────────────┐
 │                     App.lean                         │
-│  loop: poll → Key.handle → Render.table              │
+│  loop: poll → Key.handle → fetch → Render.table      │
 └──────┬───────────────┬──────────────────────────────┘
        │               │
        ▼               ▼
 ┌─────────────┐ ┌─────────────────────────────────────┐
 │  Key.lean   │ │            State.lean                │
-│  handlers   │ │  ┌─────────────────────────────┐    │
-│  h,j,k,l,   │ │  │ State                       │    │
-│  M,D,F,...  │ │  │  ├── views : List View      │    │
-└──────┬──────┘ │  │  ├── showInfo : Bool        │    │
-       │        │  │  └── msg : String           │    │
-       │        │  └─────────────────────────────┘    │
-       │        │  ┌─────────────────────────────┐    │
-       │        │  │ View                        │    │
-       │        │  │  ├── path, prql, disp       │    │
-       │        │  │  ├── rowVP, colVP : Viewport│    │
-       │        │  │  ├── keyCols, selCols/Rows  │    │
-       │        │  │  └── cache : Option Table   │    │
-       │        │  └─────────────────────────────┘    │
-       │        └─────────────────────────────────────┘
+│  nav: hjkl  │ │  State { views, inputMode, err }     │
+│  view: MDF  │ │  View  { path, query, nav, cache }   │
+│  src: r,R,: │ │  Nav   { rowCur, colCur, keyCols }   │
+└──────┬──────┘ └─────────────────────────────────────┘
+       │
+       ├──────────────────┐
+       ▼                  ▼
+┌─────────────┐   ┌─────────────┐
+│ Source.lean │   │  Meta.lean  │
+│ ps,df,env   │   │ column info │
+│ ls,lr (find)│   │ 0,1 selects │
+│ temp tables │   │ ret→keyCols │
+└──────┬──────┘   └─────────────┘
+       │
        ▼
 ┌─────────────────────────────────────────────────────┐
 │                   Backend.lean                       │
-│  ┌───────────┐  ┌───────────┐  ┌─────────────────┐  │
-│  │ Prql.lean │→ │ prqlc CLI │→ │   Adbc.lean     │  │
-│  │ type-safe │  │ PRQL→SQL  │  │ DuckDB via FFI  │  │
-│  └───────────┘  └───────────┘  └─────────────────┘  │
-│  + meta cache (.tv.meta files)                       │
+│  Prql.lean → prqlc CLI → Adbc.lean (DuckDB FFI)     │
+│  Query { base, filters, sorts, derives, selects }   │
 └─────────────────────────────────────────────────────┘
        │
        ▼
 ┌─────────────────────────────────────────────────────┐
 │                   Render.lean                        │
-│  displayOrder → visibleRange → header/row            │
-│  keyCols first, then rest in original order          │
+│  displayOrder: keyCols first, then rest             │
+│  visibleRange: offset + screen height               │
 └──────┬──────────────────────────────────────────────┘
        │
        ▼
 ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
 │  Term.lean  │  │ Types.lean  │  │ Fzf.lean    │
-│  termbox2   │  │ Cell,Table  │  │ picker/bat  │
+│  termbox2   │  │ SomeTable   │  │ picker/bat  │
+│  FFI shim   │  │ Cell,Query  │  │ fzf/fzfMulti│
 └─────────────┘  └─────────────┘  └─────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────┐
+│                   c/ (FFI shims)                     │
+│  term_shim.c  - termbox2 bindings                   │
+│  adbc_shim.c  - DuckDB ADBC, Arrow data access      │
+│                 handles: int, float, str, bool,     │
+│                 timestamp, time, decimal, utf8      │
+└─────────────────────────────────────────────────────┘
 ```
+
+### Data Flow
+
+1. **File/Source → Query**: Path or source command creates initial Query
+2. **Query → PRQL → SQL**: Prql.lean builds PRQL, prqlc compiles to SQL
+3. **SQL → DuckDB → Arrow**: Adbc executes SQL, returns Arrow batches
+4. **Arrow → SomeTable**: Zero-copy access via FFI (no data duplication)
+5. **SomeTable → Render**: Display with keyCols first, cursor tracking
+
+### Source Types
+
+| Source | Command | Format |
+|--------|---------|--------|
+| `ps`   | `ps aux` | 11 cols, TIME→HH:MM:SS |
+| `df`   | `df -h`  | 6 cols with header |
+| `env`  | `env`    | name, value pairs |
+| `ls`   | `find -maxdepth 1` | 7 cols (perms→path) |
+| `lr`   | `find` (recursive) | 7 cols (perms→path) |
+
+Sources create DuckDB temp tables for efficient re-query.
 
 ## Core Types
 
@@ -175,22 +202,23 @@ lean_obj_res lean_tb_init(lean_obj_arg world) {
 lean/
 ├── lakefile.lean      # build config
 ├── Main.lean          # entry point
+├── Test.lean          # key tests (--keys mode)
 ├── Tv/
-│   ├── Types.lean     # Cell, Column, Table with cached widths
-│   ├── Viewport.lean  # cursor + offset scroll state
-│   ├── State.lean     # View, ViewKind, State
+│   ├── Types.lean     # Cell, SomeTable, Query, PureKey
+│   ├── State.lean     # View, ViewKind, Nav, State
 │   ├── Term.lean      # termbox2 FFI bindings
 │   ├── Adbc.lean      # DuckDB ADBC FFI bindings
-│   ├── Backend.lean   # PRQL compile, query exec, meta cache
+│   ├── Backend.lean   # PRQL compile, query exec
 │   ├── Prql.lean      # type-safe PRQL builder
-│   ├── Render.lean    # displayOrder, visibleRange, table render
-│   ├── Key.lean       # all key handlers (h,j,k,l,M,D,F,...)
-│   ├── Fzf.lean       # fzf picker, bat viewer integration
-│   ├── Csv.lean       # simple CSV parser (fallback)
-│   └── App.lean       # event loop
+│   ├── Source.lean    # system sources (ps,df,env,ls,lr)
+│   ├── Meta.lean      # meta view logic
+│   ├── Render.lean    # displayOrder, visibleRange, render
+│   ├── Key.lean       # all key handlers (nav,view,agg)
+│   ├── Fzf.lean       # fzf picker, bat viewer
+│   └── App.lean       # event loop, input modes
 └── c/
     ├── term_shim.c    # termbox2 C shim
-    └── adbc_shim.c    # DuckDB ADBC C shim
+    └── adbc_shim.c    # DuckDB ADBC C shim (Arrow types)
 ```
 
 ## Build
@@ -202,18 +230,21 @@ lake build
 ## Implementation Status
 
 1. [x] Project setup (lakefile.lean)
-2. [x] Viewport (cursor + offset)
-3. [x] termbox2 FFI bindings
-4. [x] DuckDB ADBC FFI bindings
-5. [x] PRQL type-safe builder
-6. [x] Table type with cached widths
-7. [x] CSV parser (fallback)
-8. [x] Table rendering with displayOrder
-9. [x] Key columns (M view, select, return)
-10. [x] Cursor visibility theorems
-11. [x] Meta view cache (.tv.meta files)
-12. [x] Column delete with keyCols adjustment
-13. [ ] General visibility theorem proofs (sorry)
+2. [x] termbox2 FFI bindings
+3. [x] DuckDB ADBC FFI bindings (Arrow zero-copy)
+4. [x] PRQL type-safe builder
+5. [x] SomeTable (zero-copy Arrow access)
+6. [x] Table rendering with displayOrder
+7. [x] Key columns (M view, select, return)
+8. [x] Meta view (column stats, 0/1 select)
+9. [x] System sources (ps, df, env, ls, lr)
+10. [x] Freq view (group by key cols)
+11. [x] Aggregate view (sum, avg, min, max)
+12. [x] Column operations (D, ^, s)
+13. [x] Sort ([ asc, ] desc)
+14. [x] Filter (\ expr)
+15. [x] Test suite (--keys mode)
+16. [ ] Visibility theorem proofs (sorry)
 
 ## Key Differences from Haskell
 
