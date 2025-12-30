@@ -32,6 +32,29 @@
 | OrdSetOps | Ordered set ops: add, remove, toggle, invert |
 | Cursor    | Navigation ops: get, set, move, search       |
 
+## Ops
+
+|   | . | = | + | - | ? | ^ | 0 | ~ |
+|---|---|---|---|---|---|---|---|---|
+| R | ✓ | ✓ | ✓ |   | ✓ |   |   |   |
+| C | ✓ | ✓ | ✓ |   | ✓ |   |   |   |
+| W |   |   | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| X |   |   | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| G |   |   | ✓ | ✓ | ✓ | ✓ | ✓ |   |
+
+R=row.cur, C=col.cur, W=row.sels, X=col.sels, G=col.group
+
+| Op | Cursor | OrdSet |
+|----|--------|--------|
+| .  | get    |        |
+| =  | set    |        |
+| +  | move   | add    |
+| -  |        | del    |
+| ?  | find   | mem    |
+| ^  |        | toggle |
+| 0  |        | clear  |
+| ~  |        | invert |
+
 ## Structures
 
 | Struct   | Purpose                                       |
