@@ -27,77 +27,28 @@
 
 ## Classes
 
-```lean
--- OrdSetOps: ordered set with invert flag
--- Avoids materializing large inverted selections
-class OrdSetOps (α : Type) (β : outParam Type) where
-  empty  : β
-  add    : Array α → β → β
-  remove : Array α → β → β
-  toggle : α → β → β
-  clear  : β → β
-  invert : β → β           -- flip flag, don't materialize
-  mem    : α → β → Bool
-
--- Cursor: navigation operations
--- Bounded movement with search
-class Cursor (α : Type) (bound : Nat) (elem : Type) where
-  get    : α → Nat
-  set    : Nat → α → α
-  move   : Int → α → α
-  search : (elem → Bool) → α → α
-```
+| Class     | Purpose                                      |
+|-----------|----------------------------------------------|
+| OrdSetOps | Ordered set ops: add, remove, toggle, invert |
+| Cursor    | Navigation ops: get, set, move, search       |
 
 ## Structures
 
-```lean
--- Table: query result dimensions from Source
-structure Table where
-  nRows : Nat
-  colNames : Array String
+| Struct   | Purpose                                       |
+|----------|-----------------------------------------------|
+| Table    | Query result dimensions (nRows, colNames)     |
+| OrdSet   | Ordered set with invert flag                  |
+| DispIdx  | Type-safe display index (not raw Nat)         |
+| RowNav   | Row cursor + offset + selections              |
+| ColNav   | Column cursor + offset + selections + keys    |
+| NavState | Composes RowNav + ColNav                      |
 
--- OrdSet: ordered set implementation
--- inv=true means "all except arr"
-structure OrdSet (α : Type) [BEq α] where
-  arr : Array α := #[]
-  inv : Bool := false
+## Key Design Decisions
 
--- RowNav: row navigation state
--- Implements Cursor for vertical movement
-structure RowNav where
-  cur  : Nat          -- cursor position
-  off  : Nat          -- scroll offset
-  sels : OrdSet Nat   -- selected row indices
+**DispIdx**: Type-safe wrapper prevents mixing display index with raw Nat.
 
--- DispIdx: type-safe display index
--- Prevents mixing with raw Nat
-structure DispIdx where
-  val : Nat
+**Display order**: Key columns first, then rest. `ColNav.dispOrder` computes this.
 
--- ColNav: column navigation state
--- Implements Cursor for horizontal movement
--- Display order = keys first, then rest
-structure ColNav where
-  cur  : DispIdx         -- cursor in display order
-  off  : DispIdx         -- scroll offset in display order
-  sels : OrdSet String   -- selected column names
-  keys : OrdSet String   -- key columns (displayed first)
+**Invert flag**: `OrdSet.inv` avoids materializing large inverted selections.
 
-def ColNav.dispOrder (c : ColNav) (colNames : Array String) : Array String
-def ColNav.colAt (c : ColNav) (colNames : Array String) (i : DispIdx) : Option String
-
--- NavState: full navigation state
--- Composes row and column navigation
-structure NavState (t : Table) where
-  row : RowNav
-  col : ColNav
-```
-
-## Why ColName, not ColIdx?
-
-Display order changes when key columns move first:
-```
-Data order:    [a, b, c, d]
-Key "c":       [c | a, b, d]
-```
-Name is stable. Index is not.
+**Cursor typeclass**: Same interface for row/col navigation with different element types.
