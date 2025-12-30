@@ -25,35 +25,30 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Classes
 
-| Class     | Purpose                                      |
-|-----------|----------------------------------------------|
-| OrdSetOps | Ordered set ops: add, remove, toggle, invert |
-| Cursor    | Navigation ops: get, set, move, search       |
+## Object
 
-## Ops
+| Symbol | Target        |
+|--------|---------------|
+| r      | row.cur       |
+| c      | col.cur       |
+| R      | row.sels      |
+| C      | col.sels      |
+| G      | col.group     |
 
-|   | . | = | + | - | ? | ^ | 0 | ~ |
-|---|---|---|---|---|---|---|---|---|
-| R | ✓ | ✓ | ✓ |   | ✓ |   |   |   |
-| C | ✓ | ✓ | ✓ |   | ✓ |   |   |   |
-| W |   |   | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| X |   |   | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| G |   |   | ✓ | ✓ | ✓ | ✓ | ✓ |   |
+## Verb
 
-R=row.cur, C=col.cur, W=row.sels, X=col.sels, G=col.group
-
-| Op | Cursor | OrdSet |
-|----|--------|--------|
-| .  | get    |        |
-| =  | set    |        |
-| +  | move   | add    |
-| -  |        | del    |
-| ?  | find   | mem    |
-| ^  |        | toggle |
-| 0  |        | clear  |
-| ~  |        | invert |
+| Op | r        | c         | R          | C          | G              |
+|----|----------|-----------|------------|------------|----------------|
+| +  | down     | right     | select     | select     | add to group   |
+| -  | up       | left      | deselect   | deselect   | remove         |
+| <  | page up  | page left |            |            |                |
+| >  | page dn  | page right|            |            |                |
+| 0  | first    | first     | clear      | clear      | clear          |
+| $  | last     | last      | all        | all        | all            |
+| /  | find     | find      |            |            |                |
+| ^  |          |           | toggle     | toggle     | toggle         |
+| ~  |          |           | invert     | invert     |                |
 
 ## Structures
 
