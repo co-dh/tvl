@@ -13,7 +13,7 @@
 │                      NavState t                         │
 │  ┌──────────────────────┐  ┌──────────────────────────┐ │
 │  │       RowNav         │  │        ColNav            │ │
-│  │  cur, off, sels      │  │  cur, off, sels, keys    │ │
+│  │  cur, off, sels      │  │  cur, off, sels, group   │ │
 │  │         │            │  │         │                │ │
 │  │    Cursor class      │  │    Cursor class          │ │
 │  └─────────┬────────────┘  └─────────┬────────────────┘ │
@@ -40,14 +40,14 @@
 | OrdSet   | Ordered set with invert flag                  |
 | DispIdx  | Type-safe display index (not raw Nat)         |
 | RowNav   | Row cursor + offset + selections              |
-| ColNav   | Column cursor + offset + selections + keys    |
+| ColNav   | Column cursor + offset + selections + group   |
 | NavState | Composes RowNav + ColNav                      |
 
 ## Key Design Decisions
 
 **DispIdx**: Type-safe wrapper prevents mixing display index with raw Nat.
 
-**Display order**: Key columns first, then rest. `ColNav.dispOrder` computes this.
+**Display order**: Group columns first, then rest. `ColNav.dispOrder` computes this.
 
 **Invert flag**: `OrdSet.inv` avoids materializing large inverted selections.
 
