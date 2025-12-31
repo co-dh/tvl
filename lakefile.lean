@@ -16,3 +16,10 @@ lean_exe tv where
 lean_exe test where
   root := `Test
   moreLinkArgs := #["c/libtermshim.a", "c/libadbcshim.a", "-L/usr/local/lib", "-ltermbox2", "-Wl,-rpath,/usr/local/lib", "-Wl,--allow-shlib-undefined"]
+
+lean_lib Tc where
+  roots := #[`Tc.Basic, `Tc.App]
+
+lean_exe tc where
+  root := `Tc.App
+  moreLinkArgs := #["c/libtermshim.a", "c/libadbcshim.a", "-L/usr/local/lib", "-ltermbox2", "-Wl,-rpath,/usr/local/lib", "-Wl,--allow-shlib-undefined"]
