@@ -18,7 +18,14 @@ lean_exe test where
   moreLinkArgs := #["c/libtermshim.a", "c/libadbcshim.a", "-L/usr/local/lib", "-ltermbox2", "-Wl,-rpath,/usr/local/lib", "-Wl,--allow-shlib-undefined"]
 
 lean_lib Tc where
-  roots := #[`Tc.Basic, `Tc.App]
+  roots := #[`Tc.Offset, `Tc.Nav, `Tc.Render, `Tc.Key, `Tc.App]
+
+lean_lib Qtv where
+  roots := #[`Qtv.Types, `Qtv.State, `Qtv.Nav, `Qtv.Op, `Qtv.Render, `Qtv.Key]
+
+lean_exe qtv where
+  root := `Qtv.Main
+  moreLinkArgs := #["c/libtermshim.a", "-L/usr/local/lib", "-ltermbox2", "-Wl,-rpath,/usr/local/lib"]
 
 lean_exe tc where
   root := `Tc.App
