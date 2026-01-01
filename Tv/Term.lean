@@ -19,6 +19,14 @@ def keyEnter      : UInt16 := 0x0D
 -- | Event types
 def eventKey : UInt8 := 1
 
+-- | Modifiers (from termbox2.h)
+def modAlt  : UInt8 := 1
+def modCtrl : UInt8 := 2
+
+-- | Ctrl+letter codes (Ctrl+A=1, Ctrl+B=2, ...)
+def ctrlD : UInt32 := 4   -- Ctrl+D (page down)
+def ctrlU : UInt32 := 21  -- Ctrl+U (page up)
+
 -- | Colors (termbox2 indexed: TB_DEFAULT=0, TB_BLACK=1, ..., TB_WHITE=8)
 def default : UInt32 := 0x0000
 def black   : UInt32 := 0x0001
