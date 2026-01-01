@@ -20,8 +20,9 @@ def keyEnter      : UInt16 := 0x0D
 def eventKey : UInt8 := 1
 
 -- | Modifiers (from termbox2.h)
-def modAlt  : UInt8 := 1
-def modCtrl : UInt8 := 2
+def modAlt   : UInt8 := 1
+def modCtrl  : UInt8 := 2
+def modShift : UInt8 := 4
 
 -- | Ctrl+letter codes (Ctrl+A=1, Ctrl+B=2, ...)
 def ctrlD : UInt32 := 4   -- Ctrl+D (page down)
