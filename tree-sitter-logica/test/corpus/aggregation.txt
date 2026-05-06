@@ -1,0 +1,154 @@
+==================
+Count aggregation with bare named column
+==================
+
+BookCount(author:, count += 1) :- Wrote(author, _);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (identifier))
+        (head_arg
+          (identifier)
+          (agg_op)
+          (expression
+            (number)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier)))
+            (call_arg
+              (expression
+                (wildcard)))))))))
+
+==================
+Sum aggregation
+==================
+
+TotalPrice(total += price) :- Item(price);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (identifier)
+          (agg_op)
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier)))))))))
+
+==================
+Functor definition
+==================
+
+BigItems = Filtered{Source: AllItems, threshold: 100};
+
+---
+
+(program
+  (functor_def
+    (identifier)
+    (functor_call
+      (predicate_name
+        (identifier))
+      (functor_arg_list
+        (functor_arg
+          (identifier)
+          (expression
+            (identifier)))
+        (functor_arg
+          (identifier)
+          (expression
+            (number)))))))
+
+==================
+Recursive rule
+==================
+
+Ancestor(a, b) :- Parent(a, b);
+Ancestor(a, b) :- Parent(a, mid), Ancestor(mid, b);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier)))
+            (call_arg
+              (expression
+                (identifier))))))))
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier)))
+            (call_arg
+              (expression
+                (identifier))))))
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier)))
+            (call_arg
+              (expression
+                (identifier)))))))))
