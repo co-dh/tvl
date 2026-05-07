@@ -1,0 +1,212 @@
+==================
+Simple fact
+==================
+
+Color("red").
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (string)))))))
+
+==================
+Fact with multiple args
+==================
+
+Book("Dune", 9.99).
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (string)))
+        (head_arg
+          (expression
+            (number)))))))
+
+==================
+Simple rule
+==================
+
+Child(x) :- Parent(_, x);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (wildcard)))
+            (call_arg
+              (expression
+                (identifier)))))))))
+
+==================
+Rule with negation
+==================
+
+Prime(n) :- Number(n), n > 1, ~Composite(n);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier))))))
+      (goal
+        (comparison
+          (expression
+            (identifier))
+          (compare_op)
+          (expression
+            (number))))
+      (goal
+        (negation
+          (predicate_call
+            (predicate_name
+              (identifier))
+            (call_arg_list
+              (call_arg
+                (expression
+                  (identifier))))))))))
+
+==================
+Rule with distinct
+==================
+
+UniqueColor(c) distinct :- Item(_, c);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier))))
+      (distinct))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (wildcard)))
+            (call_arg
+              (expression
+                (identifier)))))))))
+
+==================
+Named column args
+==================
+
+BookInfo(title: t, price: p) :- Book(t, p);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (identifier)
+          (expression
+            (identifier)))
+        (head_arg
+          (identifier)
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier)))
+            (call_arg
+              (expression
+                (identifier)))))))))
+
+==================
+Import statement
+==================
+
+import path.to.module;
+
+---
+
+(program
+  (import_stmt
+    (dotted_name
+      (identifier)
+      (identifier)
+      (identifier))))
+
+==================
+Comment
+==================
+
+# This is a comment
+Color("red").
+
+---
+
+(program
+  (comment)
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (string)))))))

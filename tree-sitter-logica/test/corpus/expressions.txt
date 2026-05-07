@@ -1,0 +1,188 @@
+==================
+Arithmetic expression
+==================
+
+Result(x + 1) :- Input(x);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (binary_expr
+              (expression
+                (identifier))
+              (expression
+                (number)))))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier)))))))))
+
+==================
+Comparison in body
+==================
+
+Big(n) :- Number(n), n > 100;
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (predicate_call
+          (predicate_name
+            (identifier))
+          (call_arg_list
+            (call_arg
+              (expression
+                (identifier))))))
+      (goal
+        (comparison
+          (expression
+            (identifier))
+          (compare_op)
+          (expression
+            (number)))))))
+
+==================
+List literal
+==================
+
+MyList(l) :- l = [1, 2, 3];
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (comparison
+          (expression
+            (identifier))
+          (compare_op)
+          (expression
+            (list
+              (expression
+                (number))
+              (expression
+                (number))
+              (expression
+                (number)))))))))
+
+==================
+Struct literal
+==================
+
+Point(p) :- p = {x: 1, y: 2};
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (comparison
+          (expression
+            (identifier))
+          (compare_op)
+          (expression
+            (struct
+              (struct_field
+                (identifier)
+                (expression
+                  (number)))
+              (struct_field
+                (identifier)
+                (expression
+                  (number))))))))))
+
+==================
+In expression with Range
+==================
+
+Digit(x) :- x in Range(10);
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (identifier)))))
+    (rule_body
+      (goal
+        (in_expr
+          (expression
+            (identifier))
+          (expression
+            (predicate_call
+              (predicate_name
+                (identifier))
+              (call_arg_list
+                (call_arg
+                  (expression
+                    (number)))))))))))
+
+==================
+Boolean literals
+==================
+
+IsTrue(true).
+IsFalse(false).
+
+---
+
+(program
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (bool))))))
+  (rule_def
+    (rule_head
+      (predicate_name
+        (identifier))
+      (head_arg_list
+        (head_arg
+          (expression
+            (bool)))))))

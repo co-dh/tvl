@@ -1,0 +1,21 @@
+{
+  "name": "tree-sitter-logica",
+  "version": "0.1.0",
+  "description": "Logica grammar for tree-sitter",
+  "main": "bindings/node",
+  "keywords": ["tree-sitter", "logica", "parser", "grammar"],
+  "files": [
+    "grammar.js",
+    "queries/",
+    "src/",
+    "package.json"
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.0"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  }
+}
